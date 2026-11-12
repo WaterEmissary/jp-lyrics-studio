@@ -1,0 +1,48 @@
+# ================= 本地数据：歌曲、歌词、数据库（不要上传） =================
+# 运行时数据目录：SQLite 数据库 + 上传的音频 + 旧版 JSON 备份
+data/
+# 数据库文件（无论放在哪里）
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+# 音频文件（避免把本地歌曲误提交）
+*.mp3
+*.m4a
+*.mp4
+*.aac
+*.flac
+*.ogg
+*.oga
+*.opus
+*.wav
+*.webm
+*.wma
+*.ape
+*.ncm
+# 歌词文件
+*.lrc
+*.krc
+*.qrc
+# 习惯上用来放本地歌曲 / 歌词的目录
+songs/
+lyrics/
+music/
+
+# ================= Python / 工具 =================
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ================= 编辑器 / 系统 =================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
