@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import lrc as lrcmod
-from . import online, storage
+from . import online, storage, vocab
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
@@ -210,6 +210,32 @@ def _normalize_lines(items: list[dict]) -> list[dict]:
         lines.append(ln)
     lrcmod.recompute_ends(lines)
     return lines
+
+
+@app.put("/api/songs/order")
+def set_order(payload: dict = Body(...)):
+    """曲库拖拽排序：{ids: [歌曲ID, ...]}（服务端保存，所有设备一致）"""
+    storage.set_song_order(list(payload.get("ids") or []))
+    return storage.list_songs()
+
+
+# --------------------------------------------------------------------- vocab
+@app.get("/api/vocab")
+def get_vocab(song: str = "all"):
+    """单词本：song=歌曲ID 或 all（全部歌曲）"""
+    if song != "all":
+        storage.get_song(song)
+    return {"entries": vocab.build_vocab(None if song == "all" else song)}
+
+
+@app.put("/api/vocab/notes")
+def put_vocab_notes(payload: dict = Body(...)):
+    """保存释义 / 备注 / 收藏：{items: [{surface, meaning?, source?, note?, starred?, kana?}]}"""
+    items = payload.get("items")
+    if items is None:
+        items = [payload]
+    storage.put_vocab_notes([i for i in items if isinstance(i, dict)])
+    return {"ok": True}
 
 
 @app.get("/api/songs/{song_id}")

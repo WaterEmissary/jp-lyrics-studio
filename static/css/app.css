@@ -144,7 +144,7 @@ textarea.input { resize: vertical; line-height: 1.6; }
 .tl-badge:empty { display: none; }
 .tl-badge[data-tl="synthetic"] { color: var(--warn); border-color: currentColor; }
 .top-actions { display: flex; align-items: center; gap: 2px; }
-body[data-app="study"] .lyrics-only { display: none; }
+body[data-app="study"] .lyrics-only, body[data-app="vocab"] .lyrics-only { display: none; }
 
 .popover {
   position: fixed; z-index: 60; background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
@@ -188,7 +188,7 @@ body.sidebar-open .sidebar { width: var(--sidebar-w); }
 
 /* ---------------------------------------------------------------- 歌词 */
 .lyrics { position: absolute; inset: 0; overflow-y: auto; padding: 0 20px; scroll-behavior: smooth; outline: none; }
-body[data-app="study"] .lyrics { display: none; }
+body[data-app="study"] .lyrics, body[data-app="vocab"] .lyrics { display: none; }
 .spacer.top { height: 22vh; }
 .spacer.bottom { height: 50vh; }
 body.mode-read .spacer.top { height: 24px; }
@@ -200,7 +200,9 @@ body.mode-read .spacer.bottom { height: 30vh; }
 }
 .line-body { flex: 1; min-width: 0; }
 body.mode-sing .line-body { text-align: center; }
-body.mode-sing .line-tools { position: absolute; right: 6px; top: 8px; }
+/* 行工具按钮：横排、垂直居中，并给歌词预留两侧空间，保证按钮完全落在本行内 */
+body.mode-sing .line { padding-left: 104px; padding-right: 104px; }
+body.mode-sing .line-tools { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); }
 .line:hover { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
 body.mode-sing.has-lyrics.playing .line:not(.active) { opacity: .42; }
 body.mode-sing .line.active { background: var(--surface); box-shadow: var(--shadow); opacity: 1; }
@@ -225,13 +227,13 @@ body.hide-romaji .ro, body.hide-romaji .w-ro { display: none; }
 .zh:empty, body.hide-zh .zh { display: none; }
 .line.analyzing .jp .pending { color: var(--text-2); }
 
-.line-tools { display: flex; flex-direction: column; gap: 2px; opacity: 0; transition: opacity .15s; }
-.line:hover .line-tools, .line.active .line-tools, .line.segment .line-tools { opacity: 1; }
+.line-tools { display: flex; flex-direction: row; align-items: center; gap: 2px; align-self: center; opacity: 0; pointer-events: none; transition: opacity .15s; }
+.line:hover .line-tools, .line.active .line-tools, .line.segment .line-tools { opacity: 1; pointer-events: auto; }
 .tool { width: 28px; height: 28px; display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; }
 .tool:hover { background: var(--surface-2); color: var(--text); }
 .tool.active { color: var(--accent); background: var(--accent-soft); }
 .tool svg { width: 16px; height: 16px; }
-@media (hover: none) { .line-tools { opacity: 1; } }
+@media (hover: none) { .line-tools { opacity: 1; pointer-events: auto; } }
 
 /* 单词 */
 .w { border-radius: 6px; transition: background .12s, box-shadow .12s; }
@@ -500,10 +502,76 @@ body.editing .spacer.bottom { height: 60vh; }
   .line { padding: 8px 6px; }
   .jp { font-size: calc(19px * var(--font-scale)); }
   body.mode-sing .line.active .jp { font-size: calc(21px * var(--font-scale)); }
-  .line-tools { position: static; flex-direction: column; }
+  body.mode-sing .line { padding-left: 6px; padding-right: 96px; }
+  .tool { width: 30px; height: 30px; }
   .form-grid { grid-template-columns: 1fr; }
   .word-table-head { display: none; }
   .wrow { grid-template-columns: 1fr 1fr; }
   .wrow .wt { grid-column: 1 / -1; }
   .dict-form, .dict-row { grid-template-columns: 1fr 1fr; }
 }
+
+/* ---------------------------------------------------------------- 曲库：拖拽排序 / 本设备缓存 */
+.lib-item { display: flex; align-items: flex-start; gap: 4px; padding-left: 2px; user-select: none; }
+.lib-body { flex: 1; min-width: 0; }
+.drag-handle { flex: none; width: 18px; height: 34px; display: grid; place-items: center; color: var(--muted); cursor: grab; opacity: .35; touch-action: none; border-radius: 5px; }
+.drag-handle svg { width: 14px; height: 14px; }
+.lib-item:hover .drag-handle { opacity: .9; }
+.drag-handle:hover { background: var(--surface-2); }
+.lib-list.filtering .drag-handle { cursor: not-allowed; opacity: .15; }
+.lib-item.dragging { background: var(--surface); box-shadow: var(--shadow); position: relative; z-index: 2; opacity: .95; }
+.lib-item.dragging .drag-handle { cursor: grabbing; opacity: 1; }
+.lib-cache { display: flex; align-items: center; gap: 6px; margin-top: 5px; }
+.cache-btn { border: 1px solid var(--border); background: var(--surface); border-radius: 6px; font-size: 11.5px; padding: 1px 7px; cursor: pointer; color: var(--text-2); }
+.cache-btn:hover { border-color: var(--accent); color: var(--accent); }
+.cache-btn.ok { color: var(--ok); border-color: transparent; background: transparent; padding-left: 0; }
+.cache-btn.ok:hover { color: var(--danger); }
+.lib-cache.st-outdated .cache-btn { color: var(--warn); }
+.mini-progress { flex: 1; height: 5px; background: var(--surface-2); border-radius: 99px; overflow: hidden; max-width: 140px; }
+.mini-progress .bar { height: 100%; background: var(--accent); transition: width .2s; }
+.cache-pct { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cache-summary { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+
+.audio-banner {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--player-h) + 10px); z-index: 36;
+  width: min(620px, calc(100% - 24px)); background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: var(--shadow); padding: 10px 12px; display: grid; gap: 8px;
+}
+.ab-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ab-text { flex: 1; font-size: 13px; }
+.ab-progress { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+.audio-src { font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.audio-src[data-kind="cached"] { color: var(--ok); }
+.audio-src[data-kind="pending"], .audio-src[data-kind="downloading"] { color: var(--warn); }
+.select-inline { width: auto; padding: 2px 4px; }
+
+/* ---------------------------------------------------------------- 单词本 */
+.vocab { position: absolute; inset: 0; overflow-y: auto; padding: 16px 20px 40px; display: none; }
+body[data-app="vocab"] .vocab { display: block; }
+.vb-toolbar { max-width: 960px; margin: 0 auto; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.vb-toolbar #vb-filter { flex: 1; min-width: 180px; }
+.vb-meta { max-width: 960px; margin: 8px auto; display: flex; gap: 16px; }
+.vb-list { max-width: 960px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 10px; }
+.vb-row { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; align-content: start; }
+.vb-head { display: flex; align-items: center; gap: 6px; }
+.vb-word { font-family: var(--font-jp); font-size: 24px; line-height: 1.6; flex: 1; min-width: 0; }
+.vb-word rt { font-size: .45em; color: var(--muted); }
+.vb-star { border: 0; background: none; font-size: 18px; cursor: pointer; color: var(--muted); padding: 0 2px; }
+.vb-star.on { color: #e6a700; }
+.vb-read { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; }
+.vb-kana { font-family: var(--font-jp); font-size: 15px; }
+.vb-kana.kata { color: var(--text-2); }
+.vb-ro { font-size: 13px; color: var(--accent); }
+.vb-extra { display: flex; gap: 10px; flex-wrap: wrap; }
+.vb-mean-row { display: flex; gap: 6px; align-items: center; }
+.vb-mean { min-height: 30px; padding: 4px 8px; }
+.vb-src { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.vb-src.user { color: var(--accent); }
+.vb-exs { display: grid; gap: 3px; }
+.vb-ex { text-align: left; border: 0; background: var(--surface-2); border-radius: 7px; padding: 4px 8px; cursor: pointer; font-family: var(--font-jp); font-size: 13px; color: var(--text-2); }
+.vb-ex:hover { color: var(--text); outline: 1px solid var(--border-strong); }
+.vb-ex mark { background: var(--hl-y); color: var(--hl-ink); border-radius: 3px; padding: 0 1px; }
+.vb-ex-zh { display: block; font-family: var(--font); font-size: 12px; color: var(--muted); }
+.line.flash-line { animation: flash 1s ease 2; }
+
+body.tapping .audio-banner { bottom: calc(var(--player-h) + 130px); }

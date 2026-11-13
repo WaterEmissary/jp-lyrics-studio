@@ -28,6 +28,7 @@
   <nav class="seg app-tabs" aria-label="模式">
     <button type="button" data-app="lyrics" class="active">歌词</button>
     <button type="button" data-app="study">学习</button>
+    <button type="button" data-app="vocab">单词本</button>
   </nav>
 
   <div class="top-actions">
@@ -104,6 +105,17 @@
     <label class="chk">在下一句前提前结束 <input type="number" class="num" min="0" max="1.5" step="0.05" data-set="segTrim" /> 秒</label>
   </div>
   <div class="set-group">
+    <div class="set-label">本设备音频缓存 <span class="muted small">只影响当前浏览器</span></div>
+    <label class="chk">未缓存的歌曲：
+      <select id="set-audio-mode" class="num select-inline">
+        <option value="ask">每次询问</option>
+        <option value="stream">直接在线播放</option>
+        <option value="auto">自动下载到本设备</option>
+      </select>
+    </label>
+    <div class="chips"><span id="set-cache-usage" class="muted small"></span><button id="set-cache-clear" class="btn small ghost" type="button">清除本设备缓存</button></div>
+  </div>
+  <div class="set-group">
     <div class="set-label">播放与编辑</div>
     <label class="chk"><input type="checkbox" data-set="preservePitch" /> 变速时保持音高</label>
     <label class="chk"><input type="checkbox" data-set="applySameLines" /> 编辑时同步到本曲相同歌词（副歌）</label>
@@ -116,6 +128,7 @@
   <button type="button" data-cmd="import" class="show-sm">导入本地歌曲</button>
   <button type="button" data-app="study" class="show-sm">切换到「学习」模式</button>
   <button type="button" data-app="lyrics" class="show-sm">切换到「歌词」模式</button>
+  <button type="button" data-app="vocab" class="show-sm">打开「单词本」</button>
   <div class="menu-sep show-sm"></div>
   <button type="button" data-cmd="info">歌曲信息 / 更换音频</button>
   <button type="button" data-cmd="fulltext">全文编辑歌词（LRC）</button>
@@ -142,6 +155,10 @@
     <input id="lib-filter" class="input" type="search" placeholder="筛选歌名 / 歌手" />
     <div id="lib-list" class="lib-list"></div>
     <div class="sidebar-foot">
+      <div class="cache-summary">
+        <span id="lib-cache-summary" class="muted small"></span>
+        <button id="lib-download-all" class="btn small" type="button" hidden>全部下载</button>
+      </div>
       <button class="btn small ghost block" type="button" data-cmd="search">🔍 联网搜索歌词</button>
     </div>
   </aside>
@@ -163,7 +180,46 @@
       </div>
       <div id="study-results" class="study-results"></div>
     </section>
+
+    <section id="vocab" class="vocab" aria-label="单词本">
+      <div class="vb-toolbar">
+        <select id="vb-scope" class="input select" aria-label="范围">
+          <option value="song">当前歌曲</option>
+          <option value="all">全部歌曲</option>
+          <option value="starred">收藏的单词</option>
+        </select>
+        <input id="vb-filter" class="input" type="search" placeholder="搜索：汉字 / 假名 / 罗马音 / 释义" />
+        <select id="vb-sort" class="input select" aria-label="排序">
+          <option value="order">按出现顺序</option>
+          <option value="count">按出现次数</option>
+          <option value="kana">按五十音</option>
+        </select>
+        <button id="vb-translate" class="btn" type="button" title="用机器翻译补全没有释义的单词（手动填写的不会被覆盖）">补全释义</button>
+        <button id="vb-refresh" class="btn ghost" type="button" title="重新整理（歌词编辑后会自动跟随）">刷新</button>
+        <button id="vb-export" class="btn ghost" type="button">导出 CSV</button>
+      </div>
+      <div class="vb-meta"><span id="vb-count" class="muted small"></span><span id="vb-status" class="muted small"></span></div>
+      <div id="vb-list" class="vb-list"></div>
+    </section>
   </main>
+</div>
+
+<!-- 音频未缓存提示条（可选下载到本设备，带进度） -->
+<div id="audio-banner" class="audio-banner" hidden>
+  <div class="ab-row">
+    <span id="ab-text" class="ab-text"></span>
+    <button id="ab-close" class="icon-btn tiny" type="button" aria-label="关闭">×</button>
+  </div>
+  <div id="ab-progress" class="ab-progress" hidden>
+    <div class="progress"><div id="ab-progress-bar"></div></div>
+    <span id="ab-progress-text" class="muted small"></span>
+  </div>
+  <div class="ab-row ab-actions">
+    <button id="ab-download" class="btn small primary" type="button">下载到本设备</button>
+    <button id="ab-cancel" class="btn small" type="button" hidden>取消下载</button>
+    <button id="ab-stream" class="btn small" type="button">在线播放</button>
+    <label class="chk small"><input id="ab-remember" type="checkbox" /> 以后都这样（本设备）</label>
+  </div>
 </div>
 
 <!-- 打轴条 -->
@@ -203,6 +259,7 @@
     <span id="time-cur" class="time">00:00.0</span>
     <input id="seek" type="range" min="0" max="1000" step="1" value="0" aria-label="进度" />
     <span id="time-dur" class="time">--:--</span>
+    <span id="audio-src" class="audio-src" hidden></span>
   </div>
   <div class="player-side">
     <label class="rate" title="全局播放速度（[ / ] 调节）">
@@ -268,14 +325,19 @@
       <button id="le-now" class="btn small" type="button" title="把当前播放位置设为这一行的开始时间">取当前时间</button>
       <button id="le-preview" class="btn small" type="button">试听这一句</button>
     </div>
-    <label class="field"><span>原文（日语）</span><input id="le-text" class="input jp-input" lang="ja" /></label>
+    <div class="field">
+      <div class="field-label">原文（日语）
+        <label class="chk small" title="不用日语输入法：打 kaze → かぜ，大写 MONSUTA- → モンスター；含英文的行请关掉"><input id="le-text-ime" type="checkbox" /> 罗马音输入</label>
+      </div>
+      <input id="le-text" class="input jp-input" lang="ja" />
+    </div>
     <div id="le-stale" class="notice" hidden>原文已修改：保存时会自动重新分词，或 <button id="le-reanalyze" type="button" class="link">立即重新分析</button></div>
 
     <div id="le-seg" class="seg-editor">
       <div class="field-label">分词 <span class="muted small">点击字与字之间的竖线：<b>实线</b> = 词的分界（点击合并），<b>虚线</b> = 词内部（点击切开）</span></div>
       <div id="le-chars" class="seg-chars" lang="ja"></div>
       <div class="word-table-head">
-        <span>词</span><span>读音（平假 / 片假均可）</span><span>罗马音</span><span>高亮</span><span></span><span>声调</span><span>备注</span>
+        <span>词</span><span>读音（可直接打罗马音，自动转假名）</span><span>罗马音（改了会同步读音）</span><span>高亮</span><span></span><span>声调</span><span>备注</span>
       </div>
       <div id="le-words" class="word-table"></div>
       <div class="row-actions">
@@ -287,7 +349,7 @@
     </div>
 
     <div class="field">
-      <div class="field-label">整行罗马音 <label class="chk small"><input id="le-romaji-manual" type="checkbox" /> 手动覆盖（不勾选则由上面每个词的罗马音自动拼接）</label></div>
+      <div class="field-label">整行罗马音 <span class="muted small">与上面各词双向同步；增删了词时自动变为整行覆盖</span> <label class="chk small"><input id="le-romaji-manual" type="checkbox" /> 整行覆盖</label></div>
       <textarea id="le-romaji" class="input" rows="2"></textarea>
     </div>
     <label class="field"><span>中文</span><textarea id="le-zh" class="input" rows="2" lang="zh-CN"></textarea></label>

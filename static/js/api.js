@@ -54,6 +54,9 @@ export const api = {
   saveDictionary: (entries, remove = []) => request('PUT', '/api/dictionary', { entries, remove }),
 
   songs: () => request('GET', '/api/songs'),
+  setOrder: (ids) => request('PUT', '/api/songs/order', { ids }),
+  vocab: (song = 'all') => request('GET', `/api/vocab?song=${enc(song)}`, undefined, { timeout: 60000 }),
+  saveVocabNotes: (items) => request('PUT', '/api/vocab/notes', { items }),
   song: (id) => request('GET', `/api/songs/${enc(id)}`),
   createSong: (formData, onProgress) => upload('POST', '/api/songs', formData, onProgress),
   importSong: (payload) => request('POST', '/api/songs/import', payload),

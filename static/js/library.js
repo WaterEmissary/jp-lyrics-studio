@@ -5,8 +5,11 @@ import { api } from './api.js';
 import { openSong, updateSongHeader } from './song.js';
 import { loadSongAudio } from './player.js';
 import { readTextFile } from './editor.js';
+import { cacheIndex, downloads, downloadAudio, cancelDownload, deleteCached, putCached, fmtSize } from './cache.js';
 
 const SOURCE_LABEL = { local: '本地', netease: '网易云', lrclib: 'LRCLIB', marumaru: 'Marumaru' };
+
+let cacheIdx = new Map();   // 本设备已缓存的音频：id → {version, size}
 
 export async function refreshLibrary() {
   try {
@@ -15,40 +18,159 @@ export async function refreshLibrary() {
     toast('曲库加载失败：' + e.message, { error: true });
     state.songs = [];
   }
+  cacheIdx = await cacheIndex();
   renderLibrary();
 }
 
+async function refreshCacheIndex() {
+  cacheIdx = await cacheIndex();
+  renderLibrary();
+}
+
+/** 本设备缓存状态：none（无音频）| cached | outdated | missing | downloading */
+function cacheState(s) {
+  if (!s.hasAudio) return 'none';
+  if (downloads.has(s.id)) return 'downloading';
+  const c = cacheIdx.get(s.id);
+  if (!c) return 'missing';
+  return c.version === s.audioVersion ? 'cached' : 'outdated';
+}
+
+function cacheWidget(s) {
+  const st = cacheState(s);
+  if (st === 'none') return null;
+  const wrap = h('div', { class: `lib-cache st-${st}` });
+  if (st === 'cached') {
+    const btn = h('button', { type: 'button', class: 'cache-btn ok', title: '已缓存到本设备（点击删除本设备缓存，服务器上的文件不受影响）', text: '✓ 已缓存' });
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!confirm(`删除本设备上「${s.title}」的音频缓存？（服务器上的文件不受影响，之后可重新下载）`)) return;
+      await deleteCached(s.id);
+    });
+    wrap.append(btn);
+  } else if (st === 'downloading') {
+    const d = downloads.get(s.id);
+    const pct = d?.total ? Math.min(100, d.loaded / d.total * 100) : 0;
+    const cancel = h('button', { type: 'button', class: 'cache-btn', title: '取消下载', text: '×' });
+    cancel.addEventListener('click', (e) => { e.stopPropagation(); cancelDownload(s.id); });
+    wrap.append(
+      h('div', { class: 'mini-progress' }, h('div', { class: 'bar', style: `width:${pct.toFixed(1)}%` })),
+      h('span', { class: 'cache-pct', text: `${pct.toFixed(0)}%` }), cancel);
+  } else {
+    const label = st === 'outdated' ? `↻ 更新 ${fmtSize(s.audioSize)}` : `⬇ ${fmtSize(s.audioSize)}`;
+    const btn = h('button', { type: 'button', class: 'cache-btn', title: st === 'outdated' ? '服务器上的音频已更新，点击重新下载到本设备' : '音频还没缓存到本设备，点击下载（带进度）', text: label });
+    btn.addEventListener('click', (e) => { e.stopPropagation(); downloadAudio(s).catch(() => {}); renderLibrary(); });
+    wrap.append(btn);
+  }
+  return wrap;
+}
+
 function renderLibrary() {
+  if (drag) return; // 拖动中不重建列表
   const q = $('#lib-filter').value.trim().toLowerCase();
   const list = $('#lib-list');
   const items = state.songs.filter(s => !q || `${s.title} ${s.artist} ${s.album}`.toLowerCase().includes(q));
   $('#lib-count').textContent = String(state.songs.length);
+  list.classList.toggle('filtering', !!q);
+  renderCacheSummary();
   if (!items.length) {
     list.replaceChildren(h('div', { class: 'lib-empty muted', text: state.songs.length ? '没有匹配的歌曲' : '曲库为空。导入本地歌曲或联网搜索歌词后会保存在这里。' }));
     return;
   }
   list.replaceChildren(...items.map(s => {
     const badges = [];
-    if (s.hasAudio) badges.push('<span class="badge ok" title="已上传音频">♪ 音频</span>');
     if (s.timeline === 'synced') badges.push('<span class="badge" title="有同步时间轴">同步</span>');
     else if (s.timeline === 'synthetic') badges.push('<span class="badge warn" title="纯文本歌词，时间为估算，可打轴">估算</span>');
     else badges.push('<span class="badge warn">无歌词</span>');
+    if (!s.hasAudio) badges.push('<span class="badge warn" title="服务器上没有音频">无音频</span>');
     if (s.editedCount) badges.push(`<span class="badge edit" title="手动修改过的行">✎ ${s.editedCount}</span>`);
-    const item = h('button', {
-      type: 'button',
+    const item = h('div', {
       class: `lib-item${state.song?.id === s.id ? ' current' : ''}`,
+      role: 'button', tabindex: '0',
       dataset: { id: s.id },
-      html: `<div class="lib-title">${escapeHTML(s.title || '未命名')}</div>
-             <div class="lib-meta">${escapeHTML(s.artist || '')}${s.artist ? ' · ' : ''}${SOURCE_LABEL[s.source] || s.source} · ${s.lineCount} 行</div>
-             <div class="lib-badges">${badges.join('')}</div>`,
     });
-    item.addEventListener('click', async () => {
+    const handle = h('span', { class: 'drag-handle', title: q ? '筛选时不能排序' : '拖动排序（所有设备同步）', 'aria-label': '拖动排序', html: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>' });
+    const body = h('div', { class: 'lib-body', html: `<div class="lib-title">${escapeHTML(s.title || '未命名')}</div>
+             <div class="lib-meta">${escapeHTML(s.artist || '')}${s.artist ? ' · ' : ''}${SOURCE_LABEL[s.source] || s.source} · ${s.lineCount} 行</div>
+             <div class="lib-badges">${badges.join('')}</div>` });
+    item.append(handle, body);
+    const cw = cacheWidget(s);
+    if (cw) body.append(cw);
+    const open = async () => {
       await openSong(s.id);
       renderLibrary();
       if (window.matchMedia('(max-width: 900px)').matches) toggleSidebar(false);
-    });
+    };
+    item.addEventListener('click', (e) => { if (!e.target.closest('.drag-handle, .lib-cache')) open(); });
+    item.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
+    handle.addEventListener('pointerdown', (e) => startDrag(e, item));
     return item;
   }));
+}
+
+async function renderCacheSummary() {
+  const el = $('#lib-cache-summary');
+  if (!el) return;
+  const withAudio = state.songs.filter(s => s.hasAudio);
+  const missing = withAudio.filter(s => ['missing', 'outdated'].includes(cacheState(s)));
+  const cached = withAudio.filter(s => cacheState(s) === 'cached');
+  const dl = withAudio.filter(s => cacheState(s) === 'downloading');
+  $('#lib-download-all').hidden = !missing.length;
+  $('#lib-download-all').textContent = `全部下载（${missing.length} 首，${fmtSize(missing.reduce((a, s) => a + (s.audioSize || 0), 0))}）`;
+  el.textContent = `本设备已缓存 ${cached.length}/${withAudio.length} 首` + (dl.length ? ` · 下载中 ${dl.length}` : '');
+}
+
+// ---------------------------------------------------------------- 拖拽排序（鼠标 / 触屏通用，Pointer Events）
+let drag = null;
+
+function startDrag(e, item) {
+  if ($('#lib-filter').value.trim()) { toast('请先清空筛选再拖动排序'); return; }
+  e.preventDefault();
+  const list = $('#lib-list');
+  const rect = item.getBoundingClientRect();
+  drag = { item, list, offsetY: e.clientY - rect.top, startOrder: [...list.querySelectorAll('.lib-item')].map(el => el.dataset.id), pointerId: e.pointerId };
+  item.classList.add('dragging');
+  item.style.setProperty('--drag-y', '0px');
+  e.target.setPointerCapture?.(e.pointerId);
+  document.addEventListener('pointermove', onDragMove);
+  document.addEventListener('pointerup', endDrag, { once: true });
+  document.addEventListener('pointercancel', endDrag, { once: true });
+}
+
+function onDragMove(e) {
+  if (!drag) return;
+  const { item, list } = drag;
+  const others = [...list.querySelectorAll('.lib-item:not(.dragging)')];
+  let before = null;
+  for (const el of others) {
+    const r = el.getBoundingClientRect();
+    if (e.clientY < r.top + r.height / 2) { before = el; break; }
+  }
+  if (before) { if (item.nextElementSibling !== before) list.insertBefore(item, before); }
+  else if (list.lastElementChild !== item) list.appendChild(item);
+  // 靠近边缘时自动滚动
+  const lr = list.getBoundingClientRect();
+  if (e.clientY < lr.top + 30) list.scrollTop -= 12;
+  else if (e.clientY > lr.bottom - 30) list.scrollTop += 12;
+}
+
+async function endDrag() {
+  document.removeEventListener('pointermove', onDragMove);
+  if (!drag) return;
+  const { item, list, startOrder } = drag;
+  drag = null;
+  item.classList.remove('dragging');
+  const ids = [...list.querySelectorAll('.lib-item')].map(el => el.dataset.id);
+  if (ids.join() === startOrder.join()) return;
+  const byId = new Map(state.songs.map(s => [s.id, s]));
+  state.songs = ids.map(id => byId.get(id)).filter(Boolean);
+  try {
+    state.songs = await api.setOrder(ids);
+    toast('顺序已保存（其它设备刷新后同步）', { ms: 1400 });
+  } catch (err) {
+    toast('排序保存失败：' + err.message, { error: true });
+  }
+  renderLibrary();
 }
 
 export function toggleSidebar(force) {
@@ -287,6 +409,7 @@ async function submitImport() {
         $('#imp-progress-bar').style.width = `${Math.round(((i + p) / jobs.length) * 100)}%`;
       });
       created.push(song);
+      if (sg.audio && song.audio) await putCached(song, fd.get('audio'));
     }
     $('#dlg-import').close();
     await refreshLibrary();
@@ -325,6 +448,7 @@ async function replaceAudio(file) {
     const prepared = await prepareAudio(file);
     setStatus('正在上传音频…');
     const song = await api.uploadAudio(s.id, prepared.blob, prepared.filename, p => setStatus(`正在上传音频 ${Math.round(p * 100)}%`));
+    await putCached(song, prepared.blob);
     state.song.audio = song.audio;
     state.song.updatedAt = song.updatedAt;
     loadSongAudio(state.song);
@@ -397,6 +521,31 @@ export function initLibrary() {
   });
   $('#si-cancel').addEventListener('click', () => $('#dlg-info').close());
   bus.on('song:opened', refreshLibrary);
+  // 下载进度：节流刷新列表
+  let pending = false;
+  bus.on('cache:progress', () => {
+    if (pending) return;
+    pending = true;
+    setTimeout(() => { pending = false; renderLibrary(); }, 250);
+  });
+  bus.on('cache:changed', refreshCacheIndex);
+  bus.on('cache:error', ({ error }) => { if (error?.name !== 'AbortError') toast('下载失败：' + (error?.message || error), { error: true }); renderLibrary(); });
+  $('#lib-download-all').addEventListener('click', async () => {
+    const todo = state.songs.filter(s => ['missing', 'outdated'].includes(cacheState(s)));
+    for (const s of todo) {
+      try { await downloadAudio(s); } catch (e) { if (e?.name === 'AbortError') continue; }
+    }
+  });
+  // 其它设备可能改了曲库（新增 / 排序）：回到本页面时刷新
+  let lastRefresh = Date.now();
+  const maybeRefresh = () => {
+    if (document.visibilityState !== 'visible' || Date.now() - lastRefresh < 5000 || drag) return;
+    lastRefresh = Date.now();
+    refreshLibrary();
+  };
+  window.addEventListener('focus', maybeRefresh);
+  document.addEventListener('visibilitychange', maybeRefresh);
+  setInterval(maybeRefresh, 30000);
   bus.on('library:refresh', refreshLibrary);
   bus.on('audio:replace', replaceAudio);
 }

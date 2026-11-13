@@ -4,6 +4,7 @@ import { state } from './state.js';
 import { api } from './api.js';
 import { renderLineContent } from './render.js';
 import { lineStart, segmentRange, karaokeProgress, weightedChars } from './timing.js';
+import { getCached, downloadAudio, downloads, cancelDownload, versionOf, audioMode, setAudioMode, fmtSize } from './cache.js';
 
 export const RATES = [0.5, 0.6, 0.75, 0.85, 1, 1.25, 1.5];
 const audio = () => $('#audio');
@@ -54,6 +55,11 @@ export function play() {
     }
     startLoop();
   } else if (player.hasAudio) {
+    if (player.audioSource === 'pending' || player.audioSource === 'downloading') {
+      // 还没缓存：先在线播放（下载在后台继续，完成后无缝切换到本地缓存）
+      streamCurrent();
+      if (player.audioSource === 'stream') toast('在线播放中；可点「下载到本设备」缓存，下次秒开', { ms: 2200 });
+    }
     audio().play().catch(e => toast('播放失败：' + e.message, { error: true }));
   } else {
     toast('这首歌还没有音频：可上传音频，或切换到「计时」音源配合外部播放器');
@@ -103,26 +109,135 @@ export function stepRate(dir) {
 }
 
 // ------------------------------------------------------------ 音源
-export function loadSongAudio(song) {
+// 音频来源：cached（本设备缓存，IndexedDB）| stream（在线从服务器播放）| pending（未缓存，等待用户选择）
+let loadToken = 0;
+let objectUrl = null;
+
+function resetSrc() {
   const a = audio();
+  a.removeAttribute('src');
+  a.load();
+  if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+}
+
+function setSource(kind) {
+  player.audioSource = kind;
+  const badge = $('#audio-src');
+  const text = { cached: '本设备缓存', stream: '在线播放', pending: '未缓存', downloading: '下载中', none: '' }[kind] || '';
+  badge.textContent = text;
+  badge.dataset.kind = kind;
+  badge.hidden = !text || player.mode !== 'audio';
+}
+
+function useStream(song) {
+  const a = audio();
+  if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+  a.src = api.audioUrl(song.id, versionOf(song));
+  a.preload = 'auto';
+  a.load();
+  a.playbackRate = player.rate;
+  setSource('stream');
+}
+
+/** 切换到本地缓存的 Blob；正在在线播放时保持进度与播放状态 */
+function useBlob(blob) {
+  const a = audio();
+  const t = a.currentTime || 0;
+  const wasPlaying = !a.paused && !a.ended;
+  const old = objectUrl;
+  objectUrl = URL.createObjectURL(blob);
+  a.src = objectUrl;
+  a.load();
+  a.playbackRate = player.rate;
+  if (old) URL.revokeObjectURL(old);
+  if (t > 0 || wasPlaying) {
+    a.addEventListener('loadedmetadata', () => {
+      a.currentTime = t;
+      a.playbackRate = player.rate;
+      if (wasPlaying) a.play().catch(() => {});
+    }, { once: true });
+  }
+  setSource('cached');
+}
+
+export async function loadSongAudio(song) {
+  const token = ++loadToken;
   clearSegment();
   pause();
-  if (song?.audio) {
-    a.src = api.audioUrl(song.id, String(song.audio.size || '') + (song.updatedAt || ''));
-    a.load();
-    player.hasAudio = true;
-    setMode('audio');
-  } else {
-    a.removeAttribute('src');
-    a.load();
-    player.hasAudio = false;
-    setMode(song?.lines?.length ? 'timer' : 'audio', { quiet: true });
-  }
+  resetSrc();
+  hideAudioBanner();
   player.timerBase = 0;
   player.timerRunning = false;
-  a.playbackRate = player.rate;
+  if (song?.audio) {
+    player.hasAudio = true;
+    setMode('audio');
+    setSource('pending');
+    const rec = await getCached(song.id);
+    if (token !== loadToken) return;
+    if (rec && rec.version === versionOf(song)) {
+      useBlob(rec.blob);
+    } else if (downloads.has(song.id)) {
+      setSource('downloading');
+      showAudioBanner(song, rec ? 'outdated' : 'missing');
+    } else {
+      const mode = audioMode();
+      if (mode === 'stream') useStream(song);
+      else if (mode === 'auto') { startDownload(song); showAudioBanner(song, rec ? 'outdated' : 'missing'); }
+      else showAudioBanner(song, rec ? 'outdated' : 'missing');
+    }
+  } else {
+    player.hasAudio = false;
+    setSource('none');
+    setMode(song?.lines?.length ? 'timer' : 'audio', { quiet: true });
+  }
+  audio().playbackRate = player.rate;
   updateTimeUI();
   updatePlayUI();
+}
+
+// 未缓存提示条：下载到本设备（带进度） / 在线播放
+function showAudioBanner(song, why) {
+  const bar = $('#audio-banner');
+  bar.hidden = false;
+  bar.dataset.song = song.id;
+  const size = fmtSize(song.audio?.size);
+  $('#ab-text').textContent = why === 'outdated'
+    ? `服务器上的音频已更新，本设备缓存是旧版本（${size}）`
+    : `这首歌的音频还没有缓存到本设备（${size}）`;
+  $('#ab-download').textContent = `下载到本设备（${size}）`;
+  updateBannerProgress(song.id);
+}
+
+function hideAudioBanner() {
+  $('#audio-banner').hidden = true;
+}
+
+function updateBannerProgress(id) {
+  const bar = $('#audio-banner');
+  if (bar.hidden || bar.dataset.song !== id) return;
+  const d = downloads.get(id);
+  $('#ab-progress').hidden = !d;
+  $('#ab-download').hidden = !!d;
+  $('#ab-cancel').hidden = !d;
+  if (d) {
+    const pct = d.total ? Math.min(100, d.loaded / d.total * 100) : 0;
+    $('#ab-progress-bar').style.width = `${pct.toFixed(1)}%`;
+    $('#ab-progress-text').textContent = `${fmtSize(d.loaded)} / ${fmtSize(d.total)}（${pct.toFixed(0)}%）`;
+  }
+  $('#ab-stream').hidden = player.audioSource === 'stream';
+}
+
+export function startDownload(song) {
+  if (!song?.audio) return;
+  if (player.audioSource === 'pending') setSource('downloading');
+  downloadAudio(song).catch(() => {});
+  updateBannerProgress(song.id);
+}
+
+function streamCurrent() {
+  if (!state.song?.audio) return;
+  useStream(state.song);
+  updateBannerProgress(state.song.id);
 }
 
 export function setMode(mode, { quiet = false } = {}) {
@@ -133,6 +248,8 @@ export function setMode(mode, { quiet = false } = {}) {
   if (player.mode !== mode) pause();
   player.mode = mode;
   document.body.dataset.source = mode;
+  const badge = $('#audio-src');
+  if (badge) badge.hidden = !badge.textContent || mode !== 'audio';
   $$('button[data-source]').forEach(b => b.classList.toggle('active', b.dataset.source === mode));
   updateTimeUI();
   updatePlayUI();
@@ -416,6 +533,7 @@ export function startTapSync() {
   if (!lines.length) { toast('没有歌词可打轴'); return; }
   if (!player.hasAudio) { toast('打轴需要先上传音频'); return; }
   setMode('audio');
+  hideAudioBanner();
   tapSync.active = true;
   tapSync.idx = 0;
   tapSync.stamps = [];
@@ -562,6 +680,29 @@ export function initPlayer() {
   $('#btn-offset-minus').addEventListener('click', () => nudgeOffset(-0.1));
   $('#btn-offset-plus').addEventListener('click', () => nudgeOffset(0.1));
   $('#btn-offset-align').addEventListener('click', calibrateOffset);
+
+  // 「以后都这样」勾选后，点哪个按钮就记住哪种方式（本设备有效，显示设置里可改回「每次询问」）
+  const remember = (mode) => { if ($('#ab-remember').checked) { setAudioMode(mode); bus.emit('audio-mode:changed', mode); } };
+  $('#ab-download').addEventListener('click', () => { remember('auto'); if (state.song) startDownload(state.song); });
+  $('#ab-stream').addEventListener('click', () => { remember('stream'); streamCurrent(); play(); });
+  $('#ab-cancel').addEventListener('click', () => state.song && cancelDownload(state.song.id));
+  $('#ab-close').addEventListener('click', hideAudioBanner);
+  bus.on('cache:progress', ({ id }) => updateBannerProgress(id));
+  bus.on('cache:done', async ({ id }) => {
+    if (state.song?.id !== id) return;
+    const rec = await getCached(id);
+    if (rec && state.song?.id === id) {
+      useBlob(rec.blob);
+      hideAudioBanner();
+      toast('已缓存到本设备，之后打开无需再下载');
+    }
+  });
+  bus.on('cache:error', ({ id, error }) => {
+    if (state.song?.id !== id) return;
+    if (player.audioSource === 'downloading') setSource('pending');
+    updateBannerProgress(id);
+    if (error?.name !== 'AbortError') toast('下载失败：' + (error?.message || error), { error: true });
+  });
 
   $('#btn-tap').addEventListener('click', tap);
   $('#btn-untap').addEventListener('click', untap);

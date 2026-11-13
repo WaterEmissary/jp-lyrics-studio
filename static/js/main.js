@@ -16,6 +16,8 @@ import { initStudy, syncStudyVoice } from './study.js';
 import { initExport, openExport } from './export.js';
 import { speak, stopSpeech } from './tts.js';
 import { lineStart } from './timing.js';
+import { initVocab, openVocab } from './vocab.js';
+import { audioMode, setAudioMode, clearAll as clearAudioCache, storageEstimate, fmtSize } from './cache.js';
 
 // ---------------------------------------------------------------- 设置
 const saveSettings = debounce(async (patch) => {
@@ -200,6 +202,26 @@ function setAppMode(mode) {
   document.body.dataset.app = mode;
   $$('button[data-app]').forEach(b => b.classList.toggle('active', b.dataset.app === mode));
   if (mode === 'study') { stopSpeech(); ensureTokenizer().catch(() => {}); }
+  if (mode === 'vocab') openVocab();
+}
+
+// ---------------------------------------------------------------- 本设备设置（音频缓存策略，存在 localStorage）
+function initDeviceSettings() {
+  const sel = $('#set-audio-mode');
+  sel.value = audioMode();
+  sel.addEventListener('change', () => setAudioMode(sel.value));
+  bus.on('audio-mode:changed', (m) => { sel.value = m; });
+  const usage = async () => {
+    const est = await storageEstimate();
+    $('#set-cache-usage').textContent = est ? `已用 ${fmtSize(est.usage)} / 可用约 ${fmtSize(est.quota)}` : '';
+  };
+  $('#btn-settings').addEventListener('click', usage);
+  $('#set-cache-clear').addEventListener('click', async () => {
+    if (!confirm('清除本设备上所有已缓存的音频？（服务器上的文件不受影响，可随时重新下载）')) return;
+    await clearAudioCache();
+    usage();
+    toast('已清除本设备音频缓存');
+  });
 }
 
 // ---------------------------------------------------------------- 启动
@@ -220,6 +242,10 @@ async function boot() {
   initSearch();
   initStudy();
   initExport();
+  initVocab();
+  bus.on('app:mode', setAppMode);
+  bus.on('song:open', (id) => openSong(id));
+  initDeviceSettings();
   initLyricsInteractions();
   initKeyboard();
 

@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("JLS_DATA_DIR", ROOT / "data")).resolve()
 DB_PATH = DATA_DIR / "studio.db"
 AUDIO_DIR = DATA_DIR / "audio"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2：songs.sort_order（曲库手动排序）、vocab_notes（单词本释义）
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -105,7 +105,8 @@ CREATE TABLE IF NOT EXISTS songs (
   lyric_source   TEXT,                           -- JSON
   created_at     REAL,
   updated_at     REAL,
-  last_opened_at REAL
+  last_opened_at REAL,
+  sort_order     REAL                            -- 曲库手动排序（小的在前），v2 新增
 );
 CREATE INDEX IF NOT EXISTS idx_songs_source ON songs(source, source_id);
 CREATE TABLE IF NOT EXISTS lines (
@@ -138,6 +139,15 @@ CREATE TABLE IF NOT EXISTS history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_song ON history(song_id, ts);
 CREATE INDEX IF NOT EXISTS idx_history_grp ON history(grp);
+CREATE TABLE IF NOT EXISTS vocab_notes (       -- 单词本：释义 / 备注 / 收藏（按词面，跨歌曲共享）
+  surface    TEXT PRIMARY KEY,
+  kana       TEXT NOT NULL DEFAULT '',
+  meaning    TEXT NOT NULL DEFAULT '',
+  source     TEXT NOT NULL DEFAULT '',             -- auto（机器翻译） | user（手动填写，不会被自动翻译覆盖）
+  note       TEXT NOT NULL DEFAULT '',
+  starred    INTEGER NOT NULL DEFAULT 0,
+  updated_at REAL
+);
 CREATE TABLE IF NOT EXISTS snapshots (
   id         TEXT PRIMARY KEY,
   song_id    TEXT NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
@@ -175,9 +185,26 @@ def db() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(SCHEMA)  # 首次连接即建表（幂等）
-        conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
+        _upgrade_schema(conn)
         _conn = conn
     return _conn
+
+
+def _upgrade_schema(conn: sqlite3.Connection) -> None:
+    """已有数据库的结构升级（按 meta.schema_version 逐步执行）。"""
+    row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
+    ver = int(row[0]) if row else 0
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(songs)")}
+    if "sort_order" not in cols:
+        conn.execute("ALTER TABLE songs ADD COLUMN sort_order REAL")
+    if ver < 2:
+        # 初始排序 = 原来的「最近打开在前」
+        ids = [r[0] for r in conn.execute(
+            "SELECT id FROM songs ORDER BY COALESCE(last_opened_at, updated_at, 0) DESC")]
+        for i, sid in enumerate(ids):
+            conn.execute("UPDATE songs SET sort_order = ? WHERE id = ? AND sort_order IS NULL", (float(i), sid))
+    conn.execute("INSERT INTO meta(key, value) VALUES ('schema_version', ?) "
+                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (str(SCHEMA_VERSION),))
 
 
 class _Tx:
@@ -274,6 +301,7 @@ _SONG_COLS = {
     "syncInfo": ("sync_info", True), "lyricSource": ("lyric_source", True),
     "createdAt": ("created_at", False), "updatedAt": ("updated_at", False),
     "lastOpenedAt": ("last_opened_at", False),
+    "sortOrder": ("sort_order", False),
 }
 
 
@@ -320,7 +348,7 @@ def list_songs() -> list[dict]:
                (SELECT COUNT(*) FROM lines l WHERE l.song_id = s.id
                   AND (l.words_edited = 1 OR l.romaji IS NOT NULL)) AS edited_count
         FROM songs s
-        ORDER BY COALESCE(s.last_opened_at, s.updated_at, 0) DESC
+        ORDER BY COALESCE(s.sort_order, 0) ASC, s.created_at DESC
     """)
     out = []
     for r in rows:
@@ -330,6 +358,9 @@ def list_songs() -> list[dict]:
             "source": s["source"], "sourceId": s["sourceId"], "hasAudio": bool(s["audio"]),
             "timeline": s["timeline"], "lineCount": r["line_count"], "editedCount": r["edited_count"],
             "createdAt": s["createdAt"], "updatedAt": s["updatedAt"], "lastOpenedAt": s["lastOpenedAt"],
+            "sortOrder": s["sortOrder"],
+            # 音频版本：浏览器本地缓存据此判断是否过期
+            "audioVersion": audio_version(s["audio"]), "audioSize": (s["audio"] or {}).get("size", 0),
         })
     return out
 
@@ -387,6 +418,27 @@ def touch_opened(song_id: str) -> float:
     return ts
 
 
+def _top_sort_order() -> float:
+    r = _q1("SELECT MIN(sort_order) AS m FROM songs")
+    return (r["m"] if r and r["m"] is not None else 0.0) - 1.0
+
+
+def set_song_order(ids: list[str]) -> None:
+    """按给定顺序重排曲库（拖拽排序）；未列出的歌保持原相对顺序排在后面。"""
+    with _tx() as c:
+        listed = [i for i in ids if isinstance(i, str)]
+        rest = [r["id"] for r in c.execute(
+            "SELECT id FROM songs ORDER BY COALESCE(sort_order, 0), created_at DESC") if r["id"] not in set(listed)]
+        for pos, sid in enumerate(listed + rest):
+            c.execute("UPDATE songs SET sort_order = ? WHERE id = ?", (float(pos), sid))
+
+
+def audio_version(audio: dict | None) -> str:
+    if not audio:
+        return ""
+    return f"{audio.get('size', 0)}-{int(audio.get('uploadedAt') or 0)}"
+
+
 def find_by_source(source: str, source_id: str) -> dict | None:
     if not source_id:
         return None
@@ -404,6 +456,7 @@ def create_song(*, title: str = "", artist: str = "", album: str = "", source: s
         "source": source, "sourceId": str(source_id or ""), "duration": duration, "audio": None,
         "timeline": timeline if lines else "none", "offset": 0.0, "syncInfo": None, "lyricSource": None,
         "lines": lines or [], "createdAt": now, "updatedAt": now, "lastOpenedAt": now,
+        "sortOrder": _top_sort_order(),   # 新歌放在曲库最上面
     }
     return save_song(song, touch=False)
 
@@ -448,7 +501,8 @@ def store_audio(song: dict, src_file, filename: str, content_type: str) -> dict:
     os.replace(tmp, target)
     if old and old.get("file") and old["file"] != target.name:
         (AUDIO_DIR / old["file"]).unlink(missing_ok=True)
-    song["audio"] = {"file": target.name, "mime": EXT_MIME[ext], "size": size, "name": filename}
+    song["audio"] = {"file": target.name, "mime": EXT_MIME[ext], "size": size, "name": filename,
+                     "uploadedAt": _now()}
     return save_song(song)
 
 
@@ -508,6 +562,51 @@ def get_history_entry(song_id: str, hid: str) -> dict | None:
 def get_history_group(song_id: str, group: str) -> list[dict]:
     rows = _q("SELECT * FROM history WHERE song_id = ? AND grp = ? ORDER BY ts", (song_id, group))
     return [_row_to_history(r) for r in rows]
+
+
+# ------------------------------------------------------------ vocab notes
+def get_vocab_notes() -> dict:
+    return {r["surface"]: {"kana": r["kana"], "meaning": r["meaning"], "source": r["source"], "note": r["note"],
+                           "starred": bool(r["starred"]), "updatedAt": r["updated_at"]}
+            for r in _q("SELECT * FROM vocab_notes")}
+
+
+def put_vocab_notes(items: list[dict]) -> dict:
+    """items: [{surface, kana?, meaning?, source?, note?, starred?}]；只更新给出的字段。
+    自动翻译（source=auto）不会覆盖用户手动填写（source=user）的释义。"""
+    with _tx() as c:
+        for it in items:
+            surface = str(it.get("surface") or "").strip()
+            if not surface:
+                continue
+            cur = c.execute("SELECT * FROM vocab_notes WHERE surface = ?", (surface,)).fetchone()
+            row = dict(cur) if cur else {"surface": surface, "kana": "", "meaning": "", "source": "", "note": "", "starred": 0}
+            if "meaning" in it:
+                if it.get("source") == "auto" and row["source"] == "user" and row["meaning"]:
+                    pass
+                else:
+                    row["meaning"] = str(it.get("meaning") or "")
+                    row["source"] = it.get("source") or "user"
+            for k in ("kana", "note"):
+                if k in it:
+                    row[k] = str(it.get(k) or "")
+            if "starred" in it:
+                row["starred"] = 1 if it.get("starred") else 0
+            c.execute("INSERT INTO vocab_notes(surface, kana, meaning, source, note, starred, updated_at) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(surface) DO UPDATE SET kana = excluded.kana, "
+                      "meaning = excluded.meaning, source = excluded.source, note = excluded.note, "
+                      "starred = excluded.starred, updated_at = excluded.updated_at",
+                      (surface, row["kana"], row["meaning"], row["source"], row["note"], row["starred"], _now()))
+    return get_vocab_notes()
+
+
+def iter_song_lines(song_id: str | None = None):
+    """单词本用：逐行返回 (song_id, title, line_id, text, zh, words, words_edited)，按曲库顺序。"""
+    sql = ("SELECT s.id AS sid, s.title, l.id AS lid, l.text, l.zh, l.words, l.words_edited FROM lines l "
+           "JOIN songs s ON s.id = l.song_id "
+           + ("WHERE s.id = ? " if song_id else "") + "ORDER BY COALESCE(s.sort_order, 0), s.created_at DESC, l.pos")
+    for r in _q(sql, (song_id,) if song_id else ()):
+        yield r["sid"], r["title"], r["lid"], r["text"], r["zh"] or "", _loads(r["words"]), bool(r["words_edited"])
 
 
 # --------------------------------------------------------------- snapshots
@@ -605,4 +704,5 @@ __all__ = [
     "list_songs", "get_song", "save_song", "touch_opened", "create_song", "delete_song", "find_by_source",
     "audio_path", "store_audio", "remove_audio", "add_history", "get_history", "get_history_entry",
     "get_history_group", "snapshot_lines", "load_snapshot", "DATA_DIR", "DB_PATH",
+    "set_song_order", "audio_version", "get_vocab_notes", "put_vocab_notes", "iter_song_lines",
 ]

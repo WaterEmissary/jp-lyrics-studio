@@ -111,3 +111,74 @@ def test_migrate_legacy_json(tmp_path, monkeypatch):
         assert not (tmp_path / "songs").exists() and (tmp_path / "_legacy_json_backup").exists()
     finally:
         storage.close()
+
+
+def test_song_order_and_new_song_on_top():
+    c = TestClient(app)
+    a = c.post("/api/songs", data={"title": "A", "lrc": LRC}).json()
+    b = c.post("/api/songs", data={"title": "B", "lrc": LRC}).json()
+    ids = [s["id"] for s in c.get("/api/songs").json()]
+    assert ids.index(b["id"]) < ids.index(a["id"])  # 新歌在最上面
+    new_order = [a["id"], b["id"]] + [i for i in ids if i not in (a["id"], b["id"])]
+    res = c.put("/api/songs/order", json={"ids": new_order}).json()
+    assert [s["id"] for s in res][:2] == [a["id"], b["id"]]
+    assert [s["id"] for s in c.get("/api/songs").json()][:2] == [a["id"], b["id"]]
+
+
+def test_audio_version_changes_on_reupload():
+    c = TestClient(app)
+    song = c.post("/api/songs", data={"title": "v"}, files={"audio": ("x.mp3", b"ID3" + b"\0" * 10, "audio/mpeg")}).json()
+    v1 = next(s for s in c.get("/api/songs").json() if s["id"] == song["id"])["audioVersion"]
+    import time as _t
+    _t.sleep(1.1)
+    c.put(f"/api/songs/{song['id']}/audio", files={"audio": ("y.mp3", b"ID3" + b"\0" * 10, "audio/mpeg")})
+    v2 = next(s for s in c.get("/api/songs").json() if s["id"] == song["id"])["audioVersion"]
+    assert v1 and v2 and v1 != v2
+
+
+def test_vocab_follows_edits_and_notes():
+    c = TestClient(app)
+    song = c.post("/api/songs", data={"title": "voc", "lrc": "[00:01.00]君の声が聞こえた\n[00:03.00]裏切りは暗いまま"}).json()
+    l0, l1 = song["lines"]
+    c.put(f"/api/songs/{song['id']}/lines", json={"lines": [
+        {"id": l0["id"], "words": [{"t": "君の", "k": "きみの", "r": "kimi no"}, {"t": "声が", "k": "こえが", "r": "koe ga"},
+                                   {"t": "聞こえた", "k": "きこえた", "r": "kikoeta"}]},
+        {"id": l1["id"], "words": [{"t": "裏切りは", "k": "うらぎりは", "r": "uragiri wa"}, {"t": "暗い", "k": "くらい", "r": "kurai"},
+                                   {"t": "まま", "k": "まま", "r": "mama"}]}], "record": False})
+    entries = {e["t"]: e for e in c.get(f"/api/vocab?song={song['id']}").json()["entries"]}
+    assert set(entries) == {"君", "声", "聞こえた", "裏切り", "暗い", "まま"}
+    assert entries["裏切り"]["k"] == "うらぎり" and entries["裏切り"]["r"] == "uragiri"
+    # 用户改读音 → 单词本跟随
+    c.put(f"/api/songs/{song['id']}/lines", json={"lines": [
+        {"id": l0["id"], "words": [{"t": "君の", "k": "あなたの", "r": "anata no"}, {"t": "声が", "k": "こえが", "r": "koe ga"},
+                                   {"t": "聞こえた", "k": "きこえた", "r": "kikoeta"}], "wordsEdited": True}], "record": True})
+    entries = {e["t"]: e for e in c.get(f"/api/vocab?song={song['id']}").json()["entries"]}
+    assert entries["君"]["k"] == "あなた" and entries["君"]["edited"]
+    # 释义：手动的不会被机翻覆盖
+    c.put("/api/vocab/notes", json={"items": [{"surface": "君", "meaning": "你", "source": "user"}]})
+    c.put("/api/vocab/notes", json={"items": [{"surface": "君", "meaning": "君主", "source": "auto"}]})
+    entries = {e["t"]: e for e in c.get("/api/vocab?song=all").json()["entries"]}
+    assert entries["君"]["meaning"] == "你" and entries["君"]["meaningSource"] == "user"
+
+
+def test_upgrade_v1_database(tmp_path, monkeypatch):
+    """v1 数据库（没有 sort_order 列）启动时自动升级，原有歌曲按最近打开排序"""
+    import sqlite3
+    from server import storage
+    db = tmp_path / "studio.db"
+    conn = sqlite3.connect(db)
+    v1_schema = storage.SCHEMA.replace(",\n  sort_order     REAL                            -- 曲库手动排序（小的在前），v2 新增", "")
+    conn.executescript(v1_schema)
+    conn.execute("INSERT INTO meta VALUES ('schema_version', '1')")
+    conn.execute("INSERT INTO songs(id, title, last_opened_at) VALUES ('a', 'old', 1), ('b', 'recent', 2)")
+    conn.commit()
+    conn.close()
+    storage.close()
+    monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "DB_PATH", db)
+    monkeypatch.setattr(storage, "AUDIO_DIR", tmp_path / "audio")
+    try:
+        storage.init()
+        assert [s["id"] for s in storage.list_songs()] == ["b", "a"]
+    finally:
+        storage.close()
