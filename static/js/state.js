@@ -6,7 +6,7 @@ export const state = {
   settings: {},
   song: null,
   songs: [],            // 曲库摘要
-  appMode: 'lyrics',    // lyrics | study
+  appMode: 'lyrics',    // list（曲库）| lyrics | vocab
   editing: false,       // 编辑模式：点击单词选中而不是跳转
   activeIdx: -1,
 };

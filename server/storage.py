@@ -34,7 +34,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("JLS_DATA_DIR", ROOT / "data")).resolve()
 DB_PATH = DATA_DIR / "studio.db"
 AUDIO_DIR = DATA_DIR / "audio"
-SCHEMA_VERSION = 2  # v2：songs.sort_order（曲库手动排序）、vocab_notes（单词本释义）
+COVER_DIR = DATA_DIR / "covers"
+SCHEMA_VERSION = 3  # v2：songs.sort_order、vocab_notes；v3：songs.cover / cover_checked（封面）、categories（分类）
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -53,7 +54,6 @@ EXT_MIME = {
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "theme": "auto",            # auto | light | dark
-    "viewMode": "sing",         # sing（跟唱，高亮当前句并居中） | read（阅读平铺）
     "layout": "stack",          # stack（原文/罗马音/中文分行） | inline（逐词对照）
     "wordStyle": "box",         # none | box（边框） | tint（交替底色） | underline
     "wordStyleLongOnly": False,  # 仅对长句启用单词样式
@@ -65,7 +65,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "playbackRate": 1.0,
     "preservePitch": True,
     "applySameLines": True,     # 编辑一行时同步到本曲相同歌词行
-    "voice": "cn-default",
+    "linePlayMode": "single",   # 行内 ▶ 按钮：single 只播这一句后停止 | continue 从这一句开始继续往下播
     "fontScale": 1.0,
     # 同步 / 单句播放
     "estimateSungEnd": True,    # 无逐字时间轴时按假名音拍估算句尾（避免把间奏/下一句算进本句）
@@ -106,7 +106,9 @@ CREATE TABLE IF NOT EXISTS songs (
   created_at     REAL,
   updated_at     REAL,
   last_opened_at REAL,
-  sort_order     REAL                            -- 曲库手动排序（小的在前），v2 新增
+  sort_order     REAL,                           -- 曲库手动排序（小的在前），v2 新增
+  cover          TEXT,                           -- JSON {file, mime, size, source: embedded|ncm|user|online, updatedAt}，v3
+  cover_checked  INTEGER NOT NULL DEFAULT 0      -- 是否已尝试从音频提取内嵌封面，v3
 );
 CREATE INDEX IF NOT EXISTS idx_songs_source ON songs(source, source_id);
 CREATE TABLE IF NOT EXISTS lines (
@@ -122,6 +124,7 @@ CREATE TABLE IF NOT EXISTS lines (
   romaji       TEXT,                             -- 整行罗马音手动覆盖
   ruby         TEXT,                             -- 外部注音 HTML
   word_timing  TEXT,                             -- JSON [{starttime,endtime,text}]
+  focus        INTEGER NOT NULL DEFAULT 0,       -- 「关注」的难句（高亮显示，练会后可取消），v3
   PRIMARY KEY (song_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_lines_pos ON lines(song_id, pos);
@@ -139,6 +142,19 @@ CREATE TABLE IF NOT EXISTS history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_song ON history(song_id, ts);
 CREATE INDEX IF NOT EXISTS idx_history_grp ON history(grp);
+CREATE TABLE IF NOT EXISTS categories (        -- 曲库分类（类似歌单；一首歌可以属于多个分类），v3
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  sort_order REAL NOT NULL DEFAULT 0,
+  created_at REAL
+);
+CREATE TABLE IF NOT EXISTS song_categories (
+  song_id     TEXT NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+  category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  added_at    REAL,
+  PRIMARY KEY (song_id, category_id)
+);
+CREATE INDEX IF NOT EXISTS idx_song_categories_cat ON song_categories(category_id);
 CREATE TABLE IF NOT EXISTS vocab_notes (       -- 单词本：释义 / 备注 / 收藏（按词面，跨歌曲共享）
   surface    TEXT PRIMARY KEY,
   kana       TEXT NOT NULL DEFAULT '',
@@ -197,6 +213,13 @@ def _upgrade_schema(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(songs)")}
     if "sort_order" not in cols:
         conn.execute("ALTER TABLE songs ADD COLUMN sort_order REAL")
+    if "cover" not in cols:
+        conn.execute("ALTER TABLE songs ADD COLUMN cover TEXT")
+    line_cols = {r[1] for r in conn.execute("PRAGMA table_info(lines)")}
+    if "focus" not in line_cols:
+        conn.execute("ALTER TABLE lines ADD COLUMN focus INTEGER NOT NULL DEFAULT 0")
+    if "cover_checked" not in cols:
+        conn.execute("ALTER TABLE songs ADD COLUMN cover_checked INTEGER NOT NULL DEFAULT 0")
     if ver < 2:
         # 初始排序 = 原来的「最近打开在前」
         ids = [r[0] for r in conn.execute(
@@ -243,6 +266,7 @@ def init() -> None:
         db()
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_json()
+    backfill_covers()
 
 
 def close() -> None:
@@ -302,6 +326,7 @@ _SONG_COLS = {
     "createdAt": ("created_at", False), "updatedAt": ("updated_at", False),
     "lastOpenedAt": ("last_opened_at", False),
     "sortOrder": ("sort_order", False),
+    "cover": ("cover", True),
 }
 
 
@@ -326,6 +351,7 @@ def _row_to_line(r: sqlite3.Row) -> dict:
         "romaji": r["romaji"],
         "ruby": r["ruby"],
         "wordTiming": _loads(r["word_timing"]),
+        "focus": bool(r["focus"]),
     }
 
 
@@ -333,12 +359,12 @@ def _line_params(song_id: str, pos: int, ln: dict) -> tuple:
     return (
         song_id, ln["id"], pos, float(ln.get("time") or 0), ln.get("end"), ln.get("text") or "",
         ln.get("zh") or "", _dumps(ln.get("words")), 1 if ln.get("wordsEdited") else 0,
-        ln.get("romaji") or None, ln.get("ruby") or None, _dumps(ln.get("wordTiming")),
+        ln.get("romaji") or None, ln.get("ruby") or None, _dumps(ln.get("wordTiming")), 1 if ln.get("focus") else 0,
     )
 
 
-_LINE_INSERT = ("INSERT INTO lines(song_id, id, pos, time, end_time, text, zh, words, words_edited, romaji, ruby, word_timing) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+_LINE_INSERT = ("INSERT INTO lines(song_id, id, pos, time, end_time, text, zh, words, words_edited, romaji, ruby, word_timing, focus) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 
 
 def list_songs() -> list[dict]:
@@ -350,6 +376,9 @@ def list_songs() -> list[dict]:
         FROM songs s
         ORDER BY COALESCE(s.sort_order, 0) ASC, s.created_at DESC
     """)
+    cats: dict[str, list[str]] = {}
+    for r in _q("SELECT song_id, category_id FROM song_categories ORDER BY added_at"):
+        cats.setdefault(r["song_id"], []).append(r["category_id"])
     out = []
     for r in rows:
         s = _row_to_song(r)
@@ -361,6 +390,10 @@ def list_songs() -> list[dict]:
             "sortOrder": s["sortOrder"],
             # 音频版本：浏览器本地缓存据此判断是否过期
             "audioVersion": audio_version(s["audio"]), "audioSize": (s["audio"] or {}).get("size", 0),
+            "duration": s["duration"] or 0,
+            # 封面版本（URL 带上它，图片可长期缓存）；空 = 没有封面
+            "coverVersion": cover_version(s["cover"]),
+            "categories": cats.get(s["id"], []),
         })
     return out
 
@@ -463,11 +496,14 @@ def create_song(*, title: str = "", artist: str = "", album: str = "", source: s
 
 def delete_song(song_id: str) -> None:
     with _tx() as c:
-        r = c.execute("SELECT audio FROM songs WHERE id = ?", (song_id,)).fetchone()
-        c.execute("DELETE FROM songs WHERE id = ?", (song_id,))  # lines / history / snapshots 级联删除
+        r = c.execute("SELECT audio, cover FROM songs WHERE id = ?", (song_id,)).fetchone()
+        c.execute("DELETE FROM songs WHERE id = ?", (song_id,))  # lines / history / snapshots / 分类关系 级联删除
     audio = _loads(r["audio"]) if r else None
     if audio:
         (AUDIO_DIR / audio["file"]).unlink(missing_ok=True)
+    cover = _loads(r["cover"]) if r else None
+    if cover:
+        (COVER_DIR / cover["file"]).unlink(missing_ok=True)
 
 
 # --------------------------------------------------------------------- audio
@@ -503,7 +539,11 @@ def store_audio(song: dict, src_file, filename: str, content_type: str) -> dict:
         (AUDIO_DIR / old["file"]).unlink(missing_ok=True)
     song["audio"] = {"file": target.name, "mime": EXT_MIME[ext], "size": size, "name": filename,
                      "uploadedAt": _now()}
-    return save_song(song)
+    save_song(song)
+    # 新音频自带封面时自动提取（用户手动设置的封面不覆盖）
+    if (song.get("cover") or {}).get("source") != "user":
+        _try_extract_cover(song)
+    return song
 
 
 def remove_audio(song: dict) -> dict:
@@ -512,6 +552,143 @@ def remove_audio(song: dict) -> dict:
         p.unlink(missing_ok=True)
     song["audio"] = None
     return save_song(song)
+
+
+# --------------------------------------------------------------------- cover
+IMAGE_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/bmp": "bmp"}
+
+
+def cover_version(cover: dict | None) -> str:
+    return f"{int((cover or {}).get('updatedAt') or 0)}-{(cover or {}).get('size', 0)}" if cover else ""
+
+
+def cover_path(song: dict) -> Path | None:
+    c = song.get("cover")
+    if not c:
+        return None
+    p = COVER_DIR / c["file"]
+    return p if p.exists() else None
+
+
+def set_cover(song: dict, data: bytes, mime: str, source: str) -> dict:
+    """保存封面图片到 data/covers/<song_id>.<ext>，更新 song.cover。"""
+    from .cover import sniff_image
+    mime = sniff_image(data) or mime
+    ext = IMAGE_EXT.get(mime)
+    if not ext:
+        raise ValueError("不支持的图片格式（支持 jpg / png / webp / gif）")
+    if len(data) > 15 * 1024 * 1024:
+        raise ValueError("封面图片太大（上限 15MB）")
+    COVER_DIR.mkdir(parents=True, exist_ok=True)
+    old = song.get("cover")
+    target = COVER_DIR / f"{song['id']}.{ext}"
+    tmp = COVER_DIR / f".upload-{secrets.token_hex(4)}"
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+    if old and old.get("file") and old["file"] != target.name:
+        (COVER_DIR / old["file"]).unlink(missing_ok=True)
+    song["cover"] = {"file": target.name, "mime": mime, "size": len(data), "source": source, "updatedAt": _now()}
+    with _tx() as c:
+        c.execute("UPDATE songs SET cover = ?, cover_checked = 1 WHERE id = ?", (_dumps(song["cover"]), song["id"]))
+    return song
+
+
+def remove_cover(song: dict) -> dict:
+    p = cover_path(song)
+    if p:
+        p.unlink(missing_ok=True)
+    song["cover"] = None
+    with _tx() as c:
+        c.execute("UPDATE songs SET cover = NULL WHERE id = ?", (song["id"],))
+    return song
+
+
+def _try_extract_cover(song: dict) -> bool:
+    from .cover import extract_cover
+    p = audio_path(song)
+    found = extract_cover(p) if p else None
+    if found:
+        set_cover(song, found[0], found[1], "embedded")
+    else:
+        with _tx() as c:
+            c.execute("UPDATE songs SET cover_checked = 1 WHERE id = ?", (song["id"],))
+    return bool(found)
+
+
+def backfill_covers() -> int:
+    """启动时给「有音频、还没封面、还没检查过」的歌提取一次内嵌封面。"""
+    n = 0
+    for r in _q("SELECT id FROM songs WHERE audio IS NOT NULL AND cover IS NULL AND cover_checked = 0"):
+        try:
+            if _try_extract_cover(get_song(r["id"])):
+                n += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return n
+
+
+# ---------------------------------------------------------------- categories
+def list_categories() -> list[dict]:
+    rows = _q("""SELECT c.*, (SELECT COUNT(*) FROM song_categories sc WHERE sc.category_id = c.id) AS cnt
+                 FROM categories c ORDER BY c.sort_order, c.created_at""")
+    return [{"id": r["id"], "name": r["name"], "count": r["cnt"], "sortOrder": r["sort_order"]} for r in rows]
+
+
+def create_category(name: str) -> dict:
+    name = (name or "").strip()[:40]
+    if not name:
+        raise ValueError("分类名不能为空")
+    cid = "c_" + secrets.token_hex(4)
+    with _tx() as c:
+        mx = c.execute("SELECT MAX(sort_order) FROM categories").fetchone()[0]
+        c.execute("INSERT INTO categories(id, name, sort_order, created_at) VALUES (?, ?, ?, ?)",
+                  (cid, name, (mx if mx is not None else -1) + 1, _now()))
+    return {"id": cid, "name": name, "count": 0}
+
+
+def rename_category(cid: str, name: str) -> None:
+    name = (name or "").strip()[:40]
+    if not name:
+        raise ValueError("分类名不能为空")
+    with _tx() as c:
+        if c.execute("UPDATE categories SET name = ? WHERE id = ?", (name, cid)).rowcount == 0:
+            raise KeyError(cid)
+
+
+def delete_category(cid: str) -> None:
+    """删除分类只删除分类本身和归类关系，歌曲不受影响。"""
+    with _tx() as c:
+        c.execute("DELETE FROM categories WHERE id = ?", (cid,))
+
+
+def set_category_order(ids: list[str]) -> None:
+    with _tx() as c:
+        for pos, cid in enumerate(ids):
+            c.execute("UPDATE categories SET sort_order = ? WHERE id = ?", (float(pos), cid))
+
+
+def set_song_categories(song_id: str, cids: list[str]) -> list[str]:
+    with _tx() as c:
+        valid = {r[0] for r in c.execute("SELECT id FROM categories")}
+        want = [x for x in dict.fromkeys(cids) if x in valid]
+        c.execute("DELETE FROM song_categories WHERE song_id = ?", (song_id,))
+        for cid in want:
+            c.execute("INSERT INTO song_categories(song_id, category_id, added_at) VALUES (?, ?, ?)",
+                      (song_id, cid, _now()))
+    return want
+
+
+def add_song_to_category(song_id: str, cid: str) -> None:
+    with _tx() as c:
+        if not c.execute("SELECT 1 FROM categories WHERE id = ?", (cid,)).fetchone():
+            raise KeyError(cid)
+        c.execute("INSERT OR IGNORE INTO song_categories(song_id, category_id, added_at) VALUES (?, ?, ?)",
+                  (song_id, cid, _now()))
+
+
+def remove_song_from_category(song_id: str, cid: str) -> None:
+    with _tx() as c:
+        c.execute("DELETE FROM song_categories WHERE song_id = ? AND category_id = ?", (song_id, cid))
 
 
 # ---------------------------------------------------------------- history
@@ -704,5 +881,7 @@ __all__ = [
     "list_songs", "get_song", "save_song", "touch_opened", "create_song", "delete_song", "find_by_source",
     "audio_path", "store_audio", "remove_audio", "add_history", "get_history", "get_history_entry",
     "get_history_group", "snapshot_lines", "load_snapshot", "DATA_DIR", "DB_PATH",
-    "set_song_order", "audio_version", "get_vocab_notes", "put_vocab_notes", "iter_song_lines",
+    "set_song_order", "audio_version", "cover_version", "cover_path", "set_cover", "remove_cover",
+    "backfill_covers", "list_categories", "create_category", "rename_category", "delete_category",
+    "set_category_order", "set_song_categories", "add_song_to_category", "remove_song_from_category", "get_vocab_notes", "put_vocab_notes", "iter_song_lines",
 ]

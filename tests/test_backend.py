@@ -182,3 +182,55 @@ def test_upgrade_v1_database(tmp_path, monkeypatch):
         assert [s["id"] for s in storage.list_songs()] == ["b", "a"]
     finally:
         storage.close()
+
+
+def test_categories_and_membership():
+    c = TestClient(app)
+    s1 = c.post("/api/songs", data={"title": "c1", "lrc": LRC}).json()
+    s2 = c.post("/api/songs", data={"title": "c2", "lrc": LRC}).json()
+    cat = c.post("/api/categories", json={"name": "练习中"}).json()
+    c.post(f"/api/categories/{cat['id']}/songs", json={"songIds": [s1["id"], s2["id"]]})
+    cats = {x["id"]: x for x in c.get("/api/categories").json()}
+    assert cats[cat["id"]]["count"] == 2
+    c.put(f"/api/songs/{s2['id']}/categories", json={"ids": []})
+    songs = {s["id"]: s for s in c.get("/api/songs").json()}
+    assert songs[s1["id"]]["categories"] == [cat["id"]] and songs[s2["id"]]["categories"] == []
+    c.patch(f"/api/categories/{cat['id']}", json={"name": "已学会"})
+    assert any(x["name"] == "已学会" for x in c.get("/api/categories").json())
+    c.delete(f"/api/categories/{cat['id']}")
+    assert c.get(f"/api/songs/{s1['id']}").status_code == 200  # 删分类不删歌
+    assert all(x["id"] != cat["id"] for x in c.get("/api/categories").json())
+
+
+def _id3_with_cover(img: bytes) -> bytes:
+    import struct
+    body = b"\x00" + b"image/jpeg\x00" + b"\x03" + b"\x00" + img
+    frame = b"APIC" + struct.pack(">I", len(body)) + b"\x00\x00" + body
+    size = len(frame)
+    syncsafe = bytes([(size >> 21) & 0x7F, (size >> 14) & 0x7F, (size >> 7) & 0x7F, size & 0x7F])
+    return b"ID3\x03\x00\x00" + syncsafe + frame + b"\xff\xfb" + b"\0" * 200
+
+
+def test_embedded_cover_and_manual_cover():
+    c = TestClient(app)
+    jpg = b"\xff\xd8\xff\xe0" + b"\0" * 50
+    song = c.post("/api/songs", data={"title": "cv"}, files={"audio": ("x.mp3", _id3_with_cover(jpg), "audio/mpeg")}).json()
+    summary = next(s for s in c.get("/api/songs").json() if s["id"] == song["id"])
+    assert summary["coverVersion"]
+    r = c.get(f"/api/songs/{song['id']}/cover")
+    assert r.status_code == 200 and r.content == jpg and r.headers["content-type"] == "image/jpeg"
+    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 30
+    c.put(f"/api/songs/{song['id']}/cover", files={"image": ("c.png", png, "image/png")})
+    assert c.get(f"/api/songs/{song['id']}/cover").content == png
+    assert c.get(f"/api/songs/{song['id']}").json()["cover"]["source"] == "user"
+    c.delete(f"/api/songs/{song['id']}/cover")
+    assert c.get(f"/api/songs/{song['id']}/cover").status_code == 404
+
+
+def test_line_focus_flag():
+    c = TestClient(app)
+    song = c.post("/api/songs", data={"lrc": LRC}).json()
+    lid = song["lines"][1]["id"]
+    c.put(f"/api/songs/{song['id']}/lines", json={"lines": [{"id": lid, "focus": True}], "record": False})
+    lines = c.get(f"/api/songs/{song['id']}").json()["lines"]
+    assert [ln["focus"] for ln in lines] == [False, True, False]

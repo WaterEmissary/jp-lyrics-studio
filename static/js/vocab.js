@@ -5,7 +5,6 @@ import { state, lineById } from './state.js';
 import { api } from './api.js';
 import { rubyHTML, toHiragana, toKatakana, kanaToRomaji } from './kana.js';
 import { baseFormOf, ensureTokenizer } from './analyzer.js';
-import { speak } from './tts.js';
 
 const vs = {
   entries: [],
@@ -102,8 +101,6 @@ function entryRow(e) {
     await saveNote(e, { starred: e.starred });
     if (vs.scope === 'starred') renderVocab(); else row.replaceWith(entryRow(e));
   });
-  const say = h('button', { type: 'button', class: 'tool', title: '朗读', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor" stroke="none"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg>' });
-  say.addEventListener('click', () => speak(e.base || e.t));
 
   const meaning = h('input', { class: 'input vb-mean', value: e.meaning || '', placeholder: '释义（可编辑，自动保存）', lang: 'zh-CN' });
   const tag = h('span', { class: `vb-src ${e.meaningSource || ''}`, text: e.meaning ? (e.meaningSource === 'user' ? '手动' : '机翻') : '' });
@@ -131,7 +128,6 @@ function entryRow(e) {
     h('div', { class: 'vb-head' },
       star,
       h('span', { class: 'vb-word', lang: 'ja', html: rubyHTML(e.t, e.k, script, escapeHTML) }),
-      say,
       h('span', { class: 'vb-count muted small', text: `×${e.count}` }),
       e.edited ? h('span', { class: 'badge edit', title: '读音来自你编辑过的歌词', text: '已编辑' }) : null),
     h('div', { class: 'vb-read' },

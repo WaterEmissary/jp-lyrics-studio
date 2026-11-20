@@ -7,7 +7,8 @@ import { lineRomaji } from './analyzer.js';
 export const ICONS = {
   play: '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>',
   stop: '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/></svg>',
-  speak: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="currentColor" stroke="none"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>',
+  focus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/></svg>',
+  focusOn: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4" fill="none"/><path d="M5 4h11l-2 4 2 4H5z"/></svg>',
   edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
   loop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l3 3-3 3"/><path d="M4 11V9a3 3 0 0 1 3-3h13"/><path d="M7 21l-3-3 3-3"/><path d="M20 13v2a3 3 0 0 1-3 3H4"/></svg>',
 };
@@ -89,6 +90,13 @@ export function renderLineContent(line) {
   el.classList.toggle('long', [...(line.text || '')].length >= (state.settings.longLineChars || 14));
   el.classList.toggle('edited', !!(line.wordsEdited || line.romaji));
   el.classList.toggle('analyzing', !Array.isArray(line.words));
+  el.classList.toggle('focus', !!line.focus);
+  const fb = el.querySelector('.tool[data-act="focus"]');
+  if (fb) {
+    fb.classList.toggle('active', !!line.focus);
+    fb.innerHTML = line.focus ? ICONS.focusOn : ICONS.focus;
+    fb.title = line.focus ? '已关注（练会了就点一下取消高亮）' : '关注这一句（难句高亮，练会后再点取消）';
+  }
 }
 
 function lineElement(line, idx) {
@@ -101,7 +109,7 @@ function lineElement(line, idx) {
     </div>
     <div class="line-tools">
       <button type="button" class="tool" data-act="play" title="播放这一句（再点停止）" aria-label="播放这一句">${ICONS.play}</button>
-      <button type="button" class="tool" data-act="speak" title="朗读（TTS）" aria-label="朗读这一句">${ICONS.speak}</button>
+      <button type="button" class="tool" data-act="focus" title="关注这一句（难句高亮，练会后再点取消）" aria-label="关注这一句">${ICONS.focus}</button>
       <button type="button" class="tool" data-act="edit" title="编辑这一行：原文 / 分词 / 读音 / 罗马音 / 中文" aria-label="编辑这一行">${ICONS.edit}</button>
     </div>`;
   return el;
@@ -146,13 +154,13 @@ function emptyCard(kind) {
   if (kind === 'welcome') {
     return h('div', { class: 'empty-card', html: `
       <h2>开始练习</h2>
-      <p>从左侧<b>曲库</b>选择歌曲，或<b>导入本地音频 + 歌词</b>（支持 mp3 / m4a / flac / ncm 与 LRC）。</p>
+      <p>从<b>曲库</b>（或播放条上的歌单按钮）选择歌曲，或<b>导入本地音频 + 歌词</b>（支持 mp3 / m4a / flac / ncm 与 LRC）。</p>
       <p>也可以 <b>联网搜索</b> 歌词（网易云 / LRCLIB），结果会自动保存到曲库。</p>
       <div class="empty-actions">
         <button type="button" class="btn primary" data-cmd="import">导入本地歌曲</button>
         <button type="button" class="btn" data-cmd="search">联网搜索歌词</button>
       </div>
-      <p class="muted small">快捷键：空格 播放/暂停 · ←/→ 上/下一句 · [ / ] 调速 · R 单句循环 · E 编辑模式</p>` });
+      <p class="muted small">快捷键：空格 播放/暂停 · ←/→ 上/下一句 · [ / ] 调速 · R 单句循环 · L 歌单 · E 编辑模式</p>` });
   }
   return h('div', { class: 'empty-card', html: `
     <h2>这首歌还没有歌词</h2>
@@ -170,8 +178,6 @@ export function applyDisplayClasses() {
   b.classList.toggle('hide-furigana', !s.showFurigana);
   b.classList.toggle('hide-romaji', !s.showRomaji);
   b.classList.toggle('hide-zh', !s.showZh);
-  b.classList.toggle('mode-read', s.viewMode === 'read');
-  b.classList.toggle('mode-sing', s.viewMode !== 'read');
   b.classList.toggle('layout-inline', s.layout === 'inline');
   b.dataset.wordStyle = s.wordStyle || 'box';
   b.classList.toggle('ws-long-only', !!s.wordStyleLongOnly);

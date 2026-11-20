@@ -324,3 +324,59 @@ async def translate_ja_zh(text: str) -> str:
 
 def dumps(obj) -> str:  # 调试用
     return json.dumps(obj, ensure_ascii=False)
+
+
+# ================================================================ 封面（联网查找）
+async def _download_image(url: str) -> tuple[bytes, str] | None:
+    from .cover import sniff_image
+    r = await client().get(url, timeout=15)
+    if r.status_code >= 400:
+        return None
+    mime = sniff_image(r.content)
+    return (r.content, mime) if mime else None
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"[\s　・･\-－—~〜()（）\[\]【】「」『』'\"!！?？.,，。]+", "", s or "").lower()
+
+
+async def fetch_cover(title: str, artist: str = "") -> tuple[bytes, str, str] | None:
+    """按歌名 / 歌手联网查找专辑封面：网易云 → iTunes。返回 (图片字节, mime, 来源)。"""
+    q = " ".join(x for x in (title, artist) if x).strip()
+    if not q:
+        return None
+    nt, na = _norm(title), _norm(artist.split("/")[0] if artist else "")
+
+    def good(t: str, a: str) -> bool:
+        return (_norm(t) == nt or nt in _norm(t)) and (not na or na in _norm(a))
+
+    # 1) 网易云 cloudsearch（返回 al.picUrl）
+    try:
+        r = await client().get("https://music.163.com/api/cloudsearch/pc",
+                               params={"s": q, "type": 1, "limit": 8, "offset": 0},
+                               headers={"Referer": "https://music.163.com/"}, timeout=10)
+        songs = ((r.json() or {}).get("result") or {}).get("songs") or []
+        songs.sort(key=lambda s: 0 if good(s.get("name", ""), " ".join(a.get("name", "") for a in s.get("ar") or [])) else 1)
+        for s in songs[:3]:
+            url = ((s.get("al") or {}).get("picUrl") or "")
+            if url:
+                img = await _download_image(url.replace("http://", "https://") + "?param=600y600")
+                if img:
+                    return img[0], img[1], "网易云"
+    except Exception:  # noqa: BLE001
+        pass
+    # 2) iTunes Search API
+    try:
+        r = await client().get("https://itunes.apple.com/search",
+                               params={"term": q, "entity": "song", "limit": 8, "country": "jp"}, timeout=10)
+        items = (r.json() or {}).get("results") or []
+        items.sort(key=lambda s: 0 if good(s.get("trackName", ""), s.get("artistName", "")) else 1)
+        for it in items[:3]:
+            url = it.get("artworkUrl100") or ""
+            if url:
+                img = await _download_image(url.replace("100x100bb", "600x600bb"))
+                if img:
+                    return img[0], img[1], "iTunes"
+    except Exception:  # noqa: BLE001
+        pass
+    return None

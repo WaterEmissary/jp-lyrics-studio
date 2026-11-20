@@ -55,6 +55,20 @@ export const api = {
 
   songs: () => request('GET', '/api/songs'),
   setOrder: (ids) => request('PUT', '/api/songs/order', { ids }),
+  categories: () => request('GET', '/api/categories'),
+  createCategory: (name) => request('POST', '/api/categories', { name }),
+  renameCategory: (id, name) => request('PATCH', `/api/categories/${enc(id)}`, { name }),
+  deleteCategory: (id) => request('DELETE', `/api/categories/${enc(id)}`),
+  addToCategory: (id, songIds) => request('POST', `/api/categories/${enc(id)}/songs`, { songIds }),
+  setSongCategories: (songId, ids) => request('PUT', `/api/songs/${enc(songId)}/categories`, { ids }),
+  uploadCover: (songId, blob, source = 'user') => {
+    const fd = new FormData();
+    fd.append('image', blob, 'cover');
+    fd.append('source', source);
+    return upload('PUT', `/api/songs/${enc(songId)}/cover`, fd);
+  },
+  deleteCover: (songId) => request('DELETE', `/api/songs/${enc(songId)}/cover`),
+  fetchCover: (songId) => request('POST', `/api/songs/${enc(songId)}/cover/fetch`, {}, { timeout: 40000 }),
   vocab: (song = 'all') => request('GET', `/api/vocab?song=${enc(song)}`, undefined, { timeout: 60000 }),
   saveVocabNotes: (items) => request('PUT', '/api/vocab/notes', { items }),
   song: (id) => request('GET', `/api/songs/${enc(id)}`),

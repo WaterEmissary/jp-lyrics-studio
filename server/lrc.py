@@ -39,6 +39,7 @@ def make_line(time: float, text: str, **extra) -> dict:
         "romaji": None,
         "ruby": None,
         "wordTiming": None,
+        "focus": False,
     }
     line.update({k: v for k, v in extra.items() if v is not None})
     return line

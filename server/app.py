@@ -34,7 +34,7 @@ mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
 
 # 允许前端 PATCH 的行字段（其余字段一律忽略，防止脏数据）
-LINE_FIELDS = {"time", "end", "text", "zh", "words", "wordsEdited", "romaji", "ruby", "wordTiming"}
+LINE_FIELDS = {"time", "end", "text", "zh", "words", "wordsEdited", "romaji", "ruby", "wordTiming", "focus"}
 SONG_FIELDS = {"title", "artist", "album", "offset", "timeline", "duration", "syncInfo"}
 
 
@@ -287,6 +287,103 @@ def get_audio(song_id: str):
     return FileResponse(p, media_type=song["audio"]["mime"], headers={"Cache-Control": "no-cache"})
 
 
+# --------------------------------------------------------------------- cover
+@app.get("/api/songs/{song_id}/cover")
+def get_cover(song_id: str):
+    song = storage.get_song(song_id)
+    p = storage.cover_path(song)
+    if not p:
+        raise HTTPException(404, "没有封面")
+    # URL 带版本号（?v=coverVersion），可以长期缓存
+    return FileResponse(p, media_type=song["cover"]["mime"], headers={"Cache-Control": "public, max-age=31536000"})
+
+
+@app.put("/api/songs/{song_id}/cover")
+async def put_cover(song_id: str, image: UploadFile = File(...), source: str = Form("user")):
+    """上传封面（手动选择图片，或 NCM 在浏览器还原时取出的封面：source=ncm）"""
+    song = storage.get_song(song_id)
+    data = await image.read()
+    try:
+        storage.set_cover(song, data, image.content_type or "", source if source in ("user", "ncm") else "user")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"cover": song["cover"], "coverVersion": storage.cover_version(song["cover"])}
+
+
+@app.delete("/api/songs/{song_id}/cover")
+def delete_cover(song_id: str):
+    storage.remove_cover(storage.get_song(song_id))
+    return {"ok": True}
+
+
+@app.post("/api/songs/{song_id}/cover/fetch")
+async def fetch_cover(song_id: str):
+    """按歌名 / 歌手联网查找封面（网易云 → iTunes）"""
+    song = storage.get_song(song_id)
+    found = await online.fetch_cover(song.get("title") or "", song.get("artist") or "")
+    if not found:
+        raise HTTPException(404, "没有找到封面（可在歌曲信息里手动上传图片）")
+    storage.set_cover(song, found[0], found[1], "online")
+    return {"cover": song["cover"], "coverVersion": storage.cover_version(song["cover"]), "source": found[2]}
+
+
+# ---------------------------------------------------------------- categories
+@app.get("/api/categories")
+def list_categories():
+    return storage.list_categories()
+
+
+@app.post("/api/categories")
+def create_category(payload: dict = Body(...)):
+    try:
+        return storage.create_category(payload.get("name") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.put("/api/categories/order")
+def order_categories(payload: dict = Body(...)):
+    storage.set_category_order(list(payload.get("ids") or []))
+    return storage.list_categories()
+
+
+@app.patch("/api/categories/{cid}")
+def rename_category(cid: str, payload: dict = Body(...)):
+    try:
+        storage.rename_category(cid, payload.get("name") or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return storage.list_categories()
+
+
+@app.delete("/api/categories/{cid}")
+def delete_category(cid: str):
+    storage.delete_category(cid)
+    return storage.list_categories()
+
+
+@app.post("/api/categories/{cid}/songs")
+def add_to_category(cid: str, payload: dict = Body(...)):
+    """把歌加入分类：{songIds: [...]}（拖到分类上 / 批量）"""
+    for sid in payload.get("songIds") or []:
+        storage.get_song(sid)
+        storage.add_song_to_category(sid, cid)
+    return storage.list_categories()
+
+
+@app.delete("/api/categories/{cid}/songs/{song_id}")
+def remove_from_category(cid: str, song_id: str):
+    storage.remove_song_from_category(song_id, cid)
+    return storage.list_categories()
+
+
+@app.put("/api/songs/{song_id}/categories")
+def set_song_categories(song_id: str, payload: dict = Body(...)):
+    """设置歌曲所属的分类（覆盖）：{ids: [...]}"""
+    storage.get_song(song_id)
+    return {"categories": storage.set_song_categories(song_id, list(payload.get("ids") or []))}
+
+
 # --------------------------------------------------------------------- lines
 def _line_summary(before: dict | None, after: dict) -> str:
     parts = []
@@ -395,7 +492,7 @@ def replace_lyrics(song_id: str, payload: dict = Body(...)):
             if old["id"] not in used_ids:
                 ln["id"] = old["id"]
                 used_ids.add(old["id"])
-            for k in ("words", "wordsEdited", "romaji", "ruby"):
+            for k in ("words", "wordsEdited", "romaji", "ruby", "focus"):
                 if ln.get(k) in (None, False, "") and old.get(k) not in (None, False, ""):
                     ln[k] = copy.deepcopy(old[k])
             if not ln.get("zh") and old.get("zh"):

@@ -152,6 +152,12 @@ function useBlob(blob) {
   if (old) URL.revokeObjectURL(old);
   if (t > 0 || wasPlaying) {
     a.addEventListener('loadedmetadata', () => {
+    // 记录真实时长（曲库列表右侧显示）
+    const song = state.song;
+    if (song?.audio && Number.isFinite(a.duration) && a.duration > 0 && Math.abs((song.duration || 0) - a.duration) > 1) {
+      song.duration = Math.round(a.duration * 10) / 10;
+      api.patchSong(song.id, { duration: song.duration }).then(() => bus.emit('library:refresh')).catch(() => {});
+    }
       a.currentTime = t;
       a.playbackRate = player.rate;
       if (wasPlaying) a.play().catch(() => {});
@@ -307,7 +313,7 @@ export function syncHighlight(forceCenter = false) {
 }
 
 function shouldCenter() {
-  return state.settings.viewMode !== 'read' && isPlaying() && !state.editing && !userScrolling;
+  return isPlaying() && !state.editing && !userScrolling;
 }
 
 let userScrolling = false;
@@ -367,7 +373,7 @@ function applySung(k, n) {
 }
 
 function updateKaraoke(line, t) {
-  if (!line._el || state.settings.viewMode === 'read' && !isPlaying()) return;
+  if (!line._el) return;
   const jp = line._el.querySelector('.jp');
   if (!Array.isArray(line.words)) return;
   const lines = state.song.lines;
@@ -641,6 +647,12 @@ export function initPlayer() {
   a.addEventListener('timeupdate', () => { if (!isPlaying()) { syncHighlight(); updateTimeUI(); } });
   a.addEventListener('seeked', () => { syncHighlight(); updateTimeUI(); });
   a.addEventListener('loadedmetadata', () => {
+    // 记录真实时长（曲库列表右侧显示）
+    const song = state.song;
+    if (song?.audio && Number.isFinite(a.duration) && a.duration > 0 && Math.abs((song.duration || 0) - a.duration) > 1) {
+      song.duration = Math.round(a.duration * 10) / 10;
+      api.patchSong(song.id, { duration: song.duration }).then(() => bus.emit('library:refresh')).catch(() => {});
+    }
     a.playbackRate = player.rate;
     a.preservesPitch = state.settings.preservePitch !== false;
     updateTimeUI();

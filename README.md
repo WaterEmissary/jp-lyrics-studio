@@ -37,20 +37,25 @@ python run.py --reload        # 开发模式，改后端代码自动重载
 
 | 类别 | 功能 |
 |---|---|
-| 曲库 | 左侧曲库列表（筛选 / 徽章：同步/估算时间轴、手动修改行数）；**拖动排序**（存服务端，所有设备一致，切回页面自动刷新）；歌曲信息编辑；更换/删除音频；删除歌曲 |
+| 曲库（三个视图） | 顶栏「**曲库 / 歌词 / 单词本**」切换，刷新后恢复上次的视图。**曲库视图**参考网易云音乐：左侧**歌单**（全部歌曲、未归入歌单、我的歌单——「我的歌单」可展开 / 收起，＋ 新建，右键或 ⋯ 重命名 / 删除），右侧当前歌单的**歌曲列表**（序号 / 当前歌曲动画、封面、歌名、徽章、歌手、专辑、本设备缓存、时长、⋯ 菜单），搜索框筛选；点歌曲打开并切到歌词视图。一首歌可属于多个歌单：把歌拖到左侧歌单上、⋯ 菜单勾选，或在歌单页点「＋ 添加歌曲」。**拖动排序**（存服务端，所有设备一致；在歌单里拖动只调整该歌单内的相对顺序）|
+| 快速选歌 | 播放条左下角显示当前歌曲（封面 + 歌名），点击在「歌词」↔「曲库」之间切换；播放条上的歌单按钮（L）在歌词 / 单词本视图里从右侧切出**抽屉**：歌直接放在各个歌单里，歌单可展开 / 收起（记住展开状态，首次打开展开当前歌曲所在的歌单），也可直接搜索全部歌曲，点一下就切歌 |
+| 封面 | 上传 / 更换音频时自动提取内嵌封面（MP3 ID3 APIC、FLAC PICTURE、M4A covr、OGG METADATA_BLOCK_PICTURE）；NCM 由 Worker 取出内嵌封面一起上传；歌曲信息里可手动上传、「联网查找」（网易云专辑图 → iTunes）或移除；手动设置的封面不会被换音频覆盖；没有封面时显示按歌名生成的色块 |
 | 多设备 / 本设备缓存 | 音频存在服务器上，每台设备**按需下载**到浏览器缓存（IndexedDB，局域网 http 也可用），曲库每首歌显示本设备是否已缓存、可单独或「全部下载」，带进度条；打开未缓存的歌时提示「下载到本设备 / 在线播放」，可设为每次询问 / 直接在线播放 / 自动下载；服务器上音频更新后本地缓存会提示「有更新」 |
 | 单词本 | 从歌词自动整理单词（跟随你对分词 / 读音的编辑，自动去掉词尾助词）；显示平假名、片假名、罗马音、动词形容词原形、例句（点击跳回歌词）；释义自动机器翻译、可手动修改（手动的不会被覆盖）；收藏、搜索、排序、导出 CSV；当前歌曲 / 全部歌曲 / 收藏三种范围 |
 | 本地导入 | **一次选择 / 拖入多个文件**，按扩展名 → MIME → 文件头 / 文本内容自动识别「歌曲」与「歌词」（识别错可手动改）；多首歌一起导入时按文件名自动配对；NCM 在浏览器 Web Worker 中还原并读取歌名/歌手；歌名优先级：NCM 元数据 > LRC `[ti]/[ar]` > 文件名 `歌手 - 歌名`；无歌词时导入后自动打开联网搜索 |
 | 联网歌词 | 网易云（Worker 代理优先，失败回落官方接口直连，含翻译 / 逐字 yrc）、LRCLIB（同步 / 纯文本）、曲库内搜索；结果可「新建到曲库」或「**绑定到当前歌曲**（保留已上传音频）」；同来源同 ID 去重 |
 | 自动补充 | **逐字时间轴**（网易云 yrc 优先，PetitLyrics 兜底，本地导入的歌也会自动获取一次）；Marumaru 注音（演唱读法）+ 中文；MyMemory 机器翻译补全中文 |
-| 播放 | 本地音频 / 计时器（配合外部播放器）两种音源；**全局倍速** 0.5–1.5×（变速保持音高，可关）；歌词偏移 ±0.1s 微调与**一键「对齐」**（A）；单句播放 / **单句循环**（起止按逐字时间或音拍估算，不会切进下一句）；上/下一句；逐字 KTV 进度（无逐字数据时按音拍加权）；跟唱模式自动居中 |
+| 播放 | 本地音频 / 计时器（配合外部播放器）两种音源；**全局倍速** 0.5–1.5×（变速保持音高，可关）；歌词偏移 ±0.1s 微调与**一键「对齐」**（A）；每行 ▶ 的行为由播放条上的「**单句 / 连续**」按钮（M）切换：单句 = 只播这一句后停下（再点停止），连续 = 从这句开始正常往下播；**单句循环**（起止按逐字时间或音拍估算，不会切进下一句）；上/下一句；逐字 KTV 进度（无逐字数据时按音拍加权）；当前句自动居中 |
 | 打轴 | 纯文本歌词边听边按 `T` 给每句打时间，完成后时间轴变为「同步」 |
 | 分词显示 | kuromoji 分词后按「文节」组合成单词（`風に`、`触った`、`中で`）；单词样式：边框 / 交替底色 / 下划线 / 无，可「仅长句启用」；布局：分行（原文 / 罗马音 / 中文）或**逐词对照**（每个词竖排：注音-汉字-罗马音）；悬停原文词 ↔ 罗马音词互相高亮 |
-| 编辑 | **编辑模式（E）**：点选单词，Shift 多选 → 合并 / 拆分 / 5 色高亮 / 边框 / 连读 / 停顿 / 备注 / 声调；**行编辑器**（双击行或 ✎）：原文、时间、字间切分、逐词假名（平/片假名）、逐词罗马音、整行罗马音、中文——**不需要日语输入法**：读音框直接打罗马音自动转假名（大写→片假名），改罗马音会同步读音，整行罗马音与各词双向同步，原文框可开「罗马音输入」；**全文编辑**（LRC）；编辑可同步到本曲相同歌词（副歌） |
+| 关注难句 | 每行的 ⚑ 按钮（或 F 键标记当前句）把难句设为「关注」，橙色高亮显示；练熟后再点一次取消。存服务端（`line.focus`），不进修改历史 |
+| 缩略图 | 歌词区右侧类似 CodeGlance 的缩略图：每句一根横条（位置与实际排版对应），橙 = 关注、蓝点 = 手动改过、实色 = 当前句、深色 = 已唱过；半透明框为当前可见范围，可拖动、点击跳转，悬停显示该句原文。窄屏（≤720px）隐藏 |
+| 悬浮按钮 | 歌词区右下角圆形按钮快速切换：注音（平假名 → 片假名 → 隐藏）、罗马音、中文、字号（与设置面板同步） |
+| 编辑 | **编辑模式（E）**：点选单词，Shift 多选 → 合并 / 拆分 / 5 色高亮 / 边框 / 连读 / 停顿 / 备注 / 声调；**行编辑器**（双击行或 ✎；打开时自动暂停播放，关闭后不自动继续）：原文、时间、字间切分、逐词假名（平/片假名）、逐词罗马音、整行罗马音、中文——**不需要日语输入法**：读音框直接打罗马音自动转假名（大写→片假名），改罗马音会同步读音，整行罗马音与各词双向同步，原文框可开「罗马音输入」；**全文编辑**（LRC）；编辑可同步到本曲相同歌词（副歌） |
 | 持久化 | 所有修改写入服务端；**修改历史**可逐条撤销（同一次操作同步的多行作为一组撤销；全文编辑前自动快照）；**我的词典**：自定义词与读音，自动分词时整体识别，对所有歌曲生效 |
-| 其它 | 学习模式（任意日语句子分词注音 + 朗读，多音色 TTS）；导出 TXT（原文/分词/假名/罗马音/中文任意组合）与 LRC；浅色/深色/跟随系统；字号缩放；移动端适配；快捷键 |
+| 其它 | 导出 TXT（原文/分词/假名/罗马音/中文任意组合）与 LRC；浅色/深色/跟随系统；字号缩放；移动端适配；快捷键 |
 
-快捷键：`空格` 播放/暂停 · `←/→` 上/下一句 · `[ / ]` 降速/升速 · `R` 单句循环 · `A` 对齐（在某句刚开始唱时按）· `E` 编辑模式 · `T` 打点（打轴中）· `Esc` 取消选中 · 行编辑器 `Ctrl+Enter` 保存。
+快捷键：`空格` 播放/暂停 · `←/→` 上/下一句 · `[ / ]` 降速/升速 · `R` 单句循环 · `M` 单句/连续切换 · `F` 关注/取消关注当前句 · `L` 打开/关闭快速选歌抽屉（曲库视图里按 L 回到歌词）· `A` 对齐（在某句刚开始唱时按）· `E` 编辑模式 · `T` 打点（打轴中）· `Esc` 取消选中 · 行编辑器 `Ctrl+Enter` 保存。
 
 ---
 
@@ -64,10 +69,11 @@ jp-lyrics-studio/
 │   ├── app.py        FastAPI 路由（静态文件、曲库、歌词行、历史、联网转发）
 │   ├── storage.py    SQLite 存储（表结构见第 5 节）、旧版 JSON 数据自动迁移
 │   ├── lrc.py        LRC 解析 / 生成，行结构工厂 make_line()
-│   ├── online.py     网易云 / LRCLIB / Marumaru / PetitLyrics / 翻译 的服务端请求
+│   ├── online.py     网易云 / LRCLIB / Marumaru / PetitLyrics / 翻译 / 联网封面 的服务端请求
+│   ├── cover.py      从音频文件提取内嵌封面（纯 Python，无依赖）
 │   └── vocab.py      单词本：从 line.words 整理单词、去词尾助词、合并计数
 ├── static/
-│   ├── index.html    单页：顶栏、曲库侧栏、歌词区、学习区、播放条、所有 <dialog>
+│   ├── index.html    单页：顶栏（视图切换）、歌单侧栏、歌曲列表、歌词区（缩略图、悬浮按钮）、单词本、快速选歌抽屉、播放条（左下角当前歌曲）、所有 <dialog>
 │   ├── css/app.css   全部样式（:root 颜色 token，深色模式只改 token）
 │   ├── js/           前端模块（见第 6 节）
 │   ├── workers/ncm-worker.js   NCM 还原 + 元数据解密（Web Worker）
@@ -76,7 +82,8 @@ jp-lyrics-studio/
 ├── tests/test_backend.py
 └── data/             运行时生成，已在 .gitignore 中忽略（不要提交）
     ├── studio.db     SQLite 数据库（WAL 模式，旁边的 -wal / -shm 是正常的）
-    └── audio/        上传的音频 <song_id>.<ext>
+    ├── audio/        上传的音频 <song_id>.<ext>
+    └── covers/       封面图片 <song_id>.<jpg|png|webp|gif>
 ```
 
 ---
@@ -114,11 +121,14 @@ jp-lyrics-studio/
 | `lines` | 歌词行，主键 `(song_id, id)`，`pos` 为顺序；`words` / `word_timing` 为 JSON 文本，`end` 列名为 `end_time` |
 | `history` | 编辑历史：`before` / `after` 为整行 JSON 快照，`grp` 为同一次操作的分组，`snapshot` 指向 `snapshots.id` |
 | `snapshots` | 全文编辑 / 整首撤销前的整首歌词快照 |
+| `categories` | 歌单（界面上叫「歌单」，代码 / 接口里叫 categories）：`id`、`name`、`sort_order` |
+| `song_categories` | 歌曲 ↔ 歌单（多对多），删除歌曲或歌单时级联删除关联（删歌单不删歌） |
 | `vocab_notes` | 单词本释义 / 备注 / 收藏，按词面跨歌曲共享；`source = auto`（机翻）/ `user`（手动，不会被机翻覆盖） |
 
 * `songs.sort_order`：曲库手动排序（小的在前），新歌放最上面；v1 数据库启动时自动加列（`_upgrade_schema`），初始顺序 = 原来的最近打开顺序。
+* `songs.cover`（JSON：`{file, mime, size, source: embedded|ncm|user|netease|itunes, updatedAt}`）+ `songs.cover_checked`（是否已尝试过从音频提取，避免每次启动重复扫描）；`lines.focus`（关注难句，0/1）。这三列由 v3 迁移（`SCHEMA_VERSION = 3`）自动添加，旧库启动时会给已有音频补提一次内嵌封面（`backfill_covers`）。
 
-* 删除歌曲时 `lines` / `history` / `snapshots` 通过外键级联删除，音频文件同时删除。
+* 删除歌曲时 `lines` / `history` / `snapshots` / `song_categories` 通过外键级联删除，音频和封面文件同时删除。
 * 音频不放进数据库：体积大，且 `<audio>` 拖动进度需要 HTTP Range，直接存 `data/audio/<song_id>.<ext>` 最简单。
 * `storage.py` 对外仍以「整首歌一个 dict」读写（`get_song` / `save_song`），下面 5.1–5.3 描述的就是这个 dict 与前端收到的 JSON；`app.py` 不直接写 SQL。
 * **旧数据迁移**：启动时若发现旧版 JSON 存储（`data/songs/<id>/song.json`、`settings.json`、`dictionary.json`），会自动导入数据库，音频移到 `data/audio/`，旧文件移到 `data/_legacy_json_backup/`（不删除，确认无误后可手动删掉）。
@@ -134,6 +144,8 @@ jp-lyrics-studio/
   "lyricSource": {"source": "...", "sourceId": "..."},          // 「绑定联网歌词」时记录（可选）
   "audio": {"file": "261112-a1b2c3.mp3", "mime": "audio/mpeg", "size": 123, "name": "原文件名", "uploadedAt": 0} | null,
                                           // 文件在 data/audio/；版本号 audioVersion = "大小-上传时间"，浏览器缓存据此判断是否过期
+  "cover": null | {"file": "….jpg", "mime": "image/jpeg", "size": 1, "source": "embedded|ncm|user|netease|itunes", "updatedAt": 0},
+                                          // 曲库列表另给 coverVersion（缓存用）、categories（所属歌单 id 数组）、duration（秒，播放时记录）
   "timeline": "synced|synthetic|none",   // synthetic = 纯文本按 4 秒估算，可打轴
   "offset": 0.0,                          // 歌词偏移（秒），音频时间 = 歌词时间 + offset
   "syncInfo": null | {"status": "ok|none|cleared", "source": "网易云|PetitLyrics", "matched": 30, "total": 33, "median": 0.3},
@@ -156,7 +168,8 @@ jp-lyrics-studio/
   "wordsEdited": false,     // 用户手动改过分词/读音/标记 → 自动重新分析时跳过
   "romaji": null | "...",   // 整行罗马音手动覆盖；null = 由 words[].r 拼接
   "ruby": null | "<ruby>…", // 外部注音 HTML（Marumaru），分析时用于覆盖 kuromoji 读音
-  "wordTiming": null | [{"starttime": ms, "endtime": ms, "text": "風"}]  // 逐字时间轴
+  "wordTiming": null | [{"starttime": ms, "endtime": ms, "text": "風"}],  // 逐字时间轴
+  "focus": false            // 关注难句（高亮 + 缩略图橙色）；全文编辑时随原文相同的行保留
 }
 ```
 
@@ -194,7 +207,7 @@ jp-lyrics-studio/
 
 | 模块 | 职责 | 主要导出 |
 |---|---|---|
-| `main.js` | 启动、设置面板、顶栏命令（`data-cmd`）、歌词区事件委托、键盘快捷键、歌词/学习模式切换 | – |
+| `main.js` | 启动、设置面板、顶栏命令（`data-cmd`）、歌词区事件委托（行 ▶ 单句/连续、⚑ 关注、✎ 编辑）、悬浮按钮、键盘快捷键、视图切换 `setAppMode('list'|'lyrics'|'vocab')`（`state.appMode`，localStorage `jls-app`） | – |
 | `state.js` | 全局状态 `state`（settings / song / songs / editing / activeIdx） | `state`, `lineById`, `sameTextLines`, `cleanLine` |
 | `api.js` | 所有后端请求（含上传进度） | `api` |
 | `util.js` | `$`、`h()` 建元素、toast、状态栏、事件总线 `bus` | – |
@@ -205,15 +218,15 @@ jp-lyrics-studio/
 | `timing.js` | **时间轴计算**：句子实际起止（逐字 / 音拍估算）、粗粒度逐字数据修复、每拍秒数、单句区间、KTV 加权进度 | `lineStart`, `sungEnd`, `segmentRange`, `karaokeProgress`, `effectiveTiming` |
 | `editor.js` | 单词工具条、行编辑器、全文编辑、修改历史、我的词典；`saveLine()` 是所有用户编辑的唯一出口 | `saveLine`, `openLineEditor`, `mergeWords`, `splitWord` |
 | `song.js` | 打开/重载歌曲、后台分析回写、逐字时间轴获取与匹配（`matchTiming`）、Marumaru/翻译补充 | `openSong`, `analyzeSong`, `fetchWordTiming`, `autoEnrich` |
-| `library.js` | 曲库侧栏（本设备缓存状态 / 下载进度、Pointer Events 拖拽排序）、多文件导入（类型识别 `classify` / 配对 `pairFiles`）、NCM 还原、歌曲信息 | `refreshLibrary`, `openImport` |
+| `library.js` | 曲库视图：歌单侧栏 `renderSidebar`、歌曲列表 `renderSongList`（本设备缓存状态 / 下载进度、Pointer Events 拖拽排序 / 拖到歌单）；快速选歌抽屉 `renderDrawer` / `toggleDrawer`；播放条当前歌曲 `renderNowPlaying`；歌单与歌曲菜单；多文件导入（类型识别 `classify` / 配对 `pairFiles`）、NCM 还原（含封面）、歌曲信息（封面、所属歌单）。`renderLibrary()` 统一重绘以上所有部分 | `refreshLibrary`, `openImport`, `toggleDrawer`, `toggleSidebar` |
 | `cache.js` | 本设备音频缓存（IndexedDB）：带进度下载、版本校验、删除；本设备音频策略（localStorage `jls-audio-mode`） | `downloadAudio`, `getCached`, `cacheIndex` |
 | `vocab.js` | 单词本界面：加载 `/api/vocab`、原形补充、释义编辑与自动翻译、跳回歌词、导出 CSV | `openVocab` |
 | `ime.js` | 罗马音 → 假名「边打边转」输入（无需日语输入法），给读音框 / 原文框使用 | `attachRomajiIME` |
 | `search.js` | 联网搜索对话框、导入或绑定歌词、Marumaru 候选 | `openSearch` |
-| `study.js` / `tts.js` | 学习模式；朗读（百度/有道 → VOICEVOX → Google → 浏览器语音） | – |
+| `minimap.js` | 歌词缩略图：按 `line._el.offsetTop` 等比画横条、视口框拖动、悬停提示；ResizeObserver 监听行高变化后重绘 | `renderMinimap`, `initMinimap` |
 | `export.js` | 导出 TXT / LRC | – |
 
-主要 `bus` 事件：`song:opened`、`song:reload {keepPosition}`、`song:changed`、`song:reanalyze`、`song:closed`、`settings:patch`、`search:open {q, bind}`、`library:refresh`、`word:click`、`line:active`。
+主要 `bus` 事件：`song:opened`、`song:reload {keepPosition}`、`song:changed`、`song:reanalyze`、`song:closed`、`settings:patch`、`search:open {q, bind}`、`library:refresh`、`library:rendered`、`minimap:render`、`word:click`、`line:active`。
 
 ### 分词规则（`analyzer.js`）
 
@@ -244,6 +257,14 @@ LRC 只有「每句开始时间」。原实现把「下一句开始」当成本�
 | GET/PUT | `/api/dictionary` | 词典；PUT `{entries:{词:{k,r,fixed}}, remove:[词]}` |
 | GET | `/api/songs` | 曲库摘要列表（按 sort_order；含 `audioVersion` / `audioSize` 供缓存判断） |
 | PUT | `/api/songs/order` | 拖拽排序 `{ids:[...]}` |
+| GET/POST | `/api/categories` | 歌单列表（含 `count`）/ 新建 `{name}` |
+| PUT | `/api/categories/order` | 歌单排序 `{ids:[...]}` |
+| PATCH/DELETE | `/api/categories/{cid}` | 重命名 `{name}` / 删除（不删歌） |
+| POST | `/api/categories/{cid}/songs` | 加入歌单 `{songIds:[...]}` |
+| DELETE | `/api/categories/{cid}/songs/{song_id}` | 移出歌单 |
+| PUT | `/api/songs/{id}/categories` | 设置某首歌所属歌单 `{ids:[...]}` |
+| GET/PUT/DELETE | `/api/songs/{id}/cover` | 封面图片；PUT multipart `image` + `source=user\|ncm` |
+| POST | `/api/songs/{id}/cover/fetch` | 联网查找封面（网易云 → iTunes） |
 | GET | `/api/vocab?song=<id>\|all` | 单词本条目 `{t, k, r, count, forms, songs, examples, meaning, meaningSource, starred, edited}` |
 | PUT | `/api/vocab/notes` | 保存释义 / 备注 / 收藏 `{items:[{surface, meaning?, source?, note?, starred?}]}` |
 | POST | `/api/songs` | multipart：`title, artist, album, lrc, audio(file), lrcFile(file)` 新建本地歌曲 |
@@ -282,6 +303,7 @@ LRC 只有「每句开始时间」。原实现把「下一句开始」当成本�
 * 拆分多字汉字词（如把 `一緒` 拆成 `一|緒`）时读音无法精确分配，会对各部分重新查词典，可在行编辑器中手改。
 * Marumaru 依赖原项目的 Worker（`JLS_PROXY_BASE`）；Worker 不可用时该功能失效，网易云会回落到官方接口直连。
 * 变速播放依赖浏览器 `playbackRate`；计时器音源的倍速只影响计时速度（外部播放器需自行同步）。
+* 联网查找封面按「歌名 + 歌手」搜索，可能找到同名的其它版本，不对可手动上传。
 * 单用户本地应用，没有登录/鉴权；如需对外网开放请自行加反向代理与认证。
 
 ## 10. 第三方

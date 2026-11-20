@@ -1,4 +1,8 @@
-// 曲库侧栏 + 导入本地歌曲（音频 / NCM / LRC）+ 歌曲信息编辑
+// 曲库（参考网易云音乐的布局）：
+//   * 「曲库」视图：左侧歌单（全部歌曲 / 未归入歌单 / 我的歌单，可展开收起），右侧当前歌单的歌曲列表；
+//   * 「歌词」「单词本」视图：从播放条的歌单按钮切出「快速选歌」抽屉——歌直接放在各个歌单里，歌单可展开 / 收起；
+//   * 播放条左下角显示当前歌曲（封面 + 歌名），点击在「歌词」与「曲库」之间切换；
+//   * 另外负责：导入本地歌曲（音频 / NCM / LRC）、歌曲信息编辑（封面、所属歌单、音频）。
 import { $, $$, h, escapeHTML, toast, bus, setStatus } from './util.js';
 import { state } from './state.js';
 import { api } from './api.js';
@@ -8,12 +12,14 @@ import { readTextFile } from './editor.js';
 import { cacheIndex, downloads, downloadAudio, cancelDownload, deleteCached, putCached, fmtSize } from './cache.js';
 
 const SOURCE_LABEL = { local: '本地', netease: '网易云', lrclib: 'LRCLIB', marumaru: 'Marumaru' };
+const NARROW = '(max-width: 900px)';
 
 let cacheIdx = new Map();   // 本设备已缓存的音频：id → {version, size}
 
 export async function refreshLibrary() {
   try {
-    state.songs = await api.songs();
+    const [songs] = await Promise.all([api.songs(), refreshCategories()]);
+    state.songs = songs;
   } catch (e) {
     toast('曲库加载失败：' + e.message, { error: true });
     state.songs = [];
@@ -38,7 +44,7 @@ function cacheState(s) {
 
 function cacheWidget(s) {
   const st = cacheState(s);
-  if (st === 'none') return null;
+  if (st === 'none') return h('div', { class: 'lib-cache st-none', title: '服务器上没有音频', text: '—' });
   const wrap = h('div', { class: `lib-cache st-${st}` });
   if (st === 'cached') {
     const btn = h('button', { type: 'button', class: 'cache-btn ok', title: '已缓存到本设备（点击删除本设备缓存，服务器上的文件不受影响）', text: '✓ 已缓存' });
@@ -65,72 +71,457 @@ function cacheWidget(s) {
   return wrap;
 }
 
-function renderLibrary() {
-  if (drag) return; // 拖动中不重建列表
-  const q = $('#lib-filter').value.trim().toLowerCase();
-  const list = $('#lib-list');
-  const items = state.songs.filter(s => !q || `${s.title} ${s.artist} ${s.album}`.toLowerCase().includes(q));
-  $('#lib-count').textContent = String(state.songs.length);
-  list.classList.toggle('filtering', !!q);
-  renderCacheSummary();
-  if (!items.length) {
-    list.replaceChildren(h('div', { class: 'lib-empty muted', text: state.songs.length ? '没有匹配的歌曲' : '曲库为空。导入本地歌曲或联网搜索歌词后会保存在这里。' }));
+// ---------------------------------------------------------------- 歌单（后端叫 categories）
+let categories = [];          // [{id, name, count}]
+// 当前在曲库视图里查看的歌单：all = 全部歌曲，none = 未归入歌单，其它 = 歌单 id
+let currentCat = (() => { try { return localStorage.getItem('jls-cat') || 'all'; } catch { return 'all'; } })();
+
+async function refreshCategories() {
+  try { categories = await api.categories(); } catch { categories = []; }
+  if (!['all', 'none'].includes(currentCat) && !categories.some(c => c.id === currentCat)) setCurrentCat('all', false);
+}
+
+function setCurrentCat(id, render = true) {
+  const changed = currentCat !== id;
+  currentCat = id;
+  try { localStorage.setItem('jls-cat', id); } catch {}
+  if (window.matchMedia(NARROW).matches) toggleSidebar(false);
+  if (changed) $('#lib-filter').value = '';
+  if (render) {
+    renderLibrary();
+    if (changed) $('#lib-list').scrollTop = 0;
+  }
+}
+
+/** 某个歌单里的歌（按曲库顺序，不含筛选） */
+function catSongs(id) {
+  if (id === 'all') return state.songs;
+  if (id === 'none') return state.songs.filter(s => !(s.categories || []).length);
+  return state.songs.filter(s => (s.categories || []).includes(id));
+}
+
+function catName(id) {
+  if (id === 'all') return '全部歌曲';
+  if (id === 'none') return '未归入歌单';
+  return categories.find(c => c.id === id)?.name || '歌单';
+}
+
+/** 歌单封面：歌单里第一首有封面的歌；都没有时用按名字生成的色块 */
+function playlistCover(id, cls) {
+  const withCover = catSongs(id).find(s => s.coverVersion);
+  if (withCover) return coverEl(withCover, cls);
+  return placeholderCover({ title: catName(id) }, cls);
+}
+
+const ICON_ALL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V6l11-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/></svg>';
+const ICON_NONE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16"/></svg>';
+
+let plCollapsed = (() => { try { return localStorage.getItem('jls-pl-collapsed') === '1'; } catch { return false; } })();
+
+function renderSidebar() {
+  const fixed = (id, icon) => {
+    const b = h('button', { type: 'button', class: `pl-item fixed${currentCat === id ? ' active' : ''}`, dataset: { cat: id } },
+      h('span', { class: 'pl-icon', html: icon }),
+      h('span', { class: 'pl-name', text: catName(id) }),
+      h('span', { class: 'pl-count', text: String(catSongs(id).length) }));
+    b.addEventListener('click', () => setCurrentCat(id));
+    return b;
+  };
+  const items = [fixed('all', ICON_ALL)];
+  if (categories.length && (catSongs('none').length || currentCat === 'none')) items.push(fixed('none', ICON_NONE));
+  $('#pl-fixed').replaceChildren(...items);
+
+  $('#pl-count').textContent = String(categories.length);
+  const toggle = $('#pl-toggle');
+  toggle.setAttribute('aria-expanded', String(!plCollapsed));
+  toggle.classList.toggle('collapsed', plCollapsed);
+  const list = $('#pl-list');
+  list.hidden = plCollapsed;
+  if (!categories.length) {
+    list.replaceChildren(h('div', { class: 'pl-empty muted small', text: '点 ＋ 新建歌单，然后把右侧的歌拖进来，或在歌曲的 ⋯ 菜单里加入。' }));
     return;
   }
-  list.replaceChildren(...items.map(s => {
-    const badges = [];
-    if (s.timeline === 'synced') badges.push('<span class="badge" title="有同步时间轴">同步</span>');
-    else if (s.timeline === 'synthetic') badges.push('<span class="badge warn" title="纯文本歌词，时间为估算，可打轴">估算</span>');
-    else badges.push('<span class="badge warn">无歌词</span>');
-    if (!s.hasAudio) badges.push('<span class="badge warn" title="服务器上没有音频">无音频</span>');
-    if (s.editedCount) badges.push(`<span class="badge edit" title="手动修改过的行">✎ ${s.editedCount}</span>`);
-    const item = h('div', {
-      class: `lib-item${state.song?.id === s.id ? ' current' : ''}`,
-      role: 'button', tabindex: '0',
-      dataset: { id: s.id },
-    });
-    const handle = h('span', { class: 'drag-handle', title: q ? '筛选时不能排序' : '拖动排序（所有设备同步）', 'aria-label': '拖动排序', html: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>' });
-    const body = h('div', { class: 'lib-body', html: `<div class="lib-title">${escapeHTML(s.title || '未命名')}</div>
-             <div class="lib-meta">${escapeHTML(s.artist || '')}${s.artist ? ' · ' : ''}${SOURCE_LABEL[s.source] || s.source} · ${s.lineCount} 行</div>
-             <div class="lib-badges">${badges.join('')}</div>` });
-    item.append(handle, body);
-    const cw = cacheWidget(s);
-    if (cw) body.append(cw);
-    const open = async () => {
-      await openSong(s.id);
-      renderLibrary();
-      if (window.matchMedia('(max-width: 900px)').matches) toggleSidebar(false);
-    };
-    item.addEventListener('click', (e) => { if (!e.target.closest('.drag-handle, .lib-cache')) open(); });
-    item.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); });
-    handle.addEventListener('pointerdown', (e) => startDrag(e, item));
-    return item;
+  list.replaceChildren(...categories.map(c => {
+    const b = h('button', { type: 'button', class: `pl-item${currentCat === c.id ? ' active' : ''}`, dataset: { cat: c.id },
+      title: `${c.name}（右键或 ⋯ 可重命名 / 删除；把歌拖到这里加入歌单）` },
+    playlistCover(c.id, 'pl-cover'),
+    h('span', { class: 'pl-name', text: c.name }),
+    h('span', { class: 'pl-count', text: String(c.count) }));
+    const more = h('span', { class: 'pl-more', role: 'button', title: '重命名 / 删除', text: '⋯' });
+    more.addEventListener('click', (e) => { e.stopPropagation(); openCatMenu(c.id, more); });
+    b.append(more);
+    b.addEventListener('click', () => setCurrentCat(c.id));
+    b.addEventListener('contextmenu', (e) => { e.preventDefault(); openCatMenu(c.id, b); });
+    return b;
   }));
 }
 
-async function renderCacheSummary() {
-  const el = $('#lib-cache-summary');
-  if (!el) return;
-  const withAudio = state.songs.filter(s => s.hasAudio);
+async function newCategory({ addSongIds = [], open = true } = {}) {
+  const name = prompt('新歌单名称（例如：练习中 / 已学会 / 动漫 / Reol）');
+  if (!name?.trim()) return null;
+  try {
+    const c = await api.createCategory(name.trim());
+    if (addSongIds.length) await api.addToCategory(c.id, addSongIds);
+    plCollapsed = false;
+    try { localStorage.setItem('jls-pl-collapsed', '0'); } catch {}
+    await refreshLibrary();
+    if (open) setCurrentCat(c.id);
+    toast(addSongIds.length ? `已加入新歌单「${c.name}」` : `已创建歌单「${c.name}」：可以把歌拖进来，或点「添加歌曲」`);
+    return c;
+  } catch (e) {
+    toast('创建失败：' + e.message, { error: true });
+    return null;
+  }
+}
+
+function closeMenus() { $$('.lib-menu').forEach(m => m.remove()); }
+
+function placeMenu(menu, anchor) {
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  const w = menu.offsetWidth, hgt = menu.offsetHeight;
+  menu.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, r.left))}px`;
+  menu.style.top = `${r.bottom + hgt + 8 > window.innerHeight ? Math.max(8, r.top - hgt - 4) : r.bottom + 4}px`;
+}
+
+function openCatMenu(id, anchor) {
+  closeMenus();
+  const c = categories.find(x => x.id === id);
+  if (!c) return;
+  const menu = h('div', { class: 'lib-menu popover menu' });
+  const rename = h('button', { type: 'button', text: '重命名' });
+  rename.addEventListener('click', async () => {
+    closeMenus();
+    const name = prompt('重命名歌单', c.name);
+    if (!name?.trim() || name.trim() === c.name) return;
+    try { categories = await api.renameCategory(id, name.trim()); renderLibrary(); } catch (e) { toast(e.message, { error: true }); }
+  });
+  const del = h('button', { type: 'button', class: 'danger', text: '删除歌单（歌曲不会被删除）' });
+  del.addEventListener('click', async () => {
+    closeMenus();
+    if (!confirm(`删除歌单「${c.name}」？歌单里的歌曲仍保留在曲库中。`)) return;
+    categories = await api.deleteCategory(id);
+    if (currentCat === id) setCurrentCat('all', false);
+    await refreshLibrary();
+  });
+  menu.append(h('div', { class: 'menu-title', text: c.name }), rename, del);
+  placeMenu(menu, anchor);
+}
+
+/** 歌曲的 ⋯ 菜单：打开、加入 / 移出歌单、歌曲信息 */
+function openSongMenu(song, anchor) {
+  closeMenus();
+  const menu = h('div', { class: 'lib-menu popover menu' });
+  const open = h('button', { type: 'button', text: '打开歌词' });
+  open.addEventListener('click', () => { closeMenus(); openFromList(song); });
+  menu.append(open, h('div', { class: 'menu-sep' }), h('div', { class: 'menu-title', text: '加入歌单' }));
+  if (!categories.length) menu.append(h('div', { class: 'muted small pad-x', text: '还没有歌单' }));
+  for (const c of categories) {
+    const on = (song.categories || []).includes(c.id);
+    const row = h('label', { class: 'menu-check' }, h('input', { type: 'checkbox', checked: on }), c.name);
+    row.querySelector('input').addEventListener('change', (e) => setMembership(song, c.id, e.target.checked));
+    menu.append(row);
+  }
+  const add = h('button', { type: 'button', text: '＋ 新建歌单并加入' });
+  add.addEventListener('click', () => { closeMenus(); newCategory({ addSongIds: [song.id], open: false }); });
+  const info = h('button', { type: 'button', text: '歌曲信息 / 封面 / 音频…' });
+  info.addEventListener('click', async () => {
+    closeMenus();
+    if (state.song?.id !== song.id) await openSong(song.id);
+    openSongInfo();
+  });
+  menu.append(add, h('div', { class: 'menu-sep' }), info);
+  placeMenu(menu, anchor);
+}
+
+async function setMembership(song, catId, on) {
+  const ids = new Set(song.categories || []);
+  if (on) ids.add(catId); else ids.delete(catId);
+  try {
+    const res = await api.setSongCategories(song.id, [...ids]);
+    song.categories = res.categories;
+    await refreshCategories();
+    renderLibrary();
+  } catch (err) { toast(err.message, { error: true }); }
+}
+
+/** 歌单视图的「添加歌曲」：从全部歌曲里勾选（窄屏不能拖动时也能整理歌单） */
+function openAddSongsMenu(catId, anchor) {
+  closeMenus();
+  const menu = h('div', { class: 'lib-menu popover menu add-songs' });
+  const filter = h('input', { class: 'input', type: 'search', placeholder: '搜索歌名 / 歌手' });
+  const list = h('div', { class: 'add-songs-list' });
+  const draw = () => {
+    const q = filter.value.trim().toLowerCase();
+    const songs = state.songs.filter(s => !q || `${s.title} ${s.artist}`.toLowerCase().includes(q));
+    list.replaceChildren(...songs.map(s => {
+      const row = h('label', { class: 'menu-check' },
+        h('input', { type: 'checkbox', checked: (s.categories || []).includes(catId) }),
+        coverEl(s, 'menu-cover'),
+        h('span', { class: 'menu-check-text' }, h('span', { text: s.title || '未命名' }), h('small', { class: 'muted', text: s.artist || '' })));
+      row.querySelector('input').addEventListener('change', (e) => setMembership(s, catId, e.target.checked));
+      return row;
+    }));
+    if (!songs.length) list.append(h('div', { class: 'muted small pad-x', text: '没有匹配的歌曲' }));
+  };
+  filter.addEventListener('input', draw);
+  draw();
+  menu.append(h('div', { class: 'menu-title', text: `添加到「${catName(catId)}」` }), filter, list);
+  placeMenu(menu, anchor);
+  filter.focus();
+}
+
+// ---------------------------------------------------------------- 封面
+const coverUrl = (s) => `/api/songs/${encodeURIComponent(s.id)}/cover?v=${encodeURIComponent(s.coverVersion)}`;
+
+function coverEl(s, cls = 'lib-cover') {
+  if (s.coverVersion) {
+    const img = h('img', { class: cls, src: coverUrl(s), alt: '', loading: 'lazy', draggable: 'false' });
+    img.addEventListener('error', () => img.replaceWith(placeholderCover(s, cls)));
+    return img;
+  }
+  return placeholderCover(s, cls);
+}
+
+/** 没有封面时：按歌名生成一个颜色块 + 首字 */
+function placeholderCover(s, cls) {
+  const text = (s.title || '?').trim();
+  let hash = 0;
+  for (const ch of text) hash = (hash * 31 + ch.codePointAt(0)) >>> 0;
+  const hue = hash % 360;
+  return h('div', { class: `${cls} placeholder`, style: `--h:${hue}`, text: [...text][0] || '♪' });
+}
+
+export function songCover(s, cls) { return coverEl(s, cls); }
+
+function fmtDur(sec) {
+  if (!sec) return '';
+  const m = Math.floor(sec / 60), ss = Math.round(sec % 60);
+  return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+}
+
+function summaryOf(id) { return state.songs.find(x => x.id === id); }
+
+function songBadges(s, { withCats = false } = {}) {
+  const badges = [];
+  if (s.timeline === 'synthetic') badges.push('<span class="badge warn" title="纯文本歌词，时间为估算，可打轴">估算</span>');
+  else if (s.timeline !== 'synced') badges.push('<span class="badge warn">无歌词</span>');
+  if (!s.hasAudio) badges.push('<span class="badge warn" title="服务器上没有音频">无音频</span>');
+  if (s.editedCount) badges.push(`<span class="badge edit" title="手动修改过的行">✎ ${s.editedCount}</span>`);
+  if (withCats) {
+    const names = (s.categories || []).map(id => categories.find(c => c.id === id)?.name).filter(Boolean);
+    badges.push(...names.slice(0, 2).map(n => `<span class="badge cat">${escapeHTML(n)}</span>`));
+  }
+  return badges.join('');
+}
+
+// 正在播放的小动画（当前歌曲在列表里的序号位置）
+const EQ = '<span class="eq" aria-label="当前歌曲"><i></i><i></i><i></i></span>';
+
+/** 从列表 / 抽屉打开一首歌并切到歌词视图 */
+async function openFromList(s, { toLyrics = true } = {}) {
+  closeMenus();
+  if (state.song?.id !== s.id) await openSong(s.id);
+  if (toLyrics) bus.emit('app:mode', 'lyrics');
+  renderLibrary();
+}
+
+// ---------------------------------------------------------------- 歌曲列表（曲库视图右侧）
+function visibleSongs() {
+  const q = $('#lib-filter').value.trim().toLowerCase();
+  return catSongs(currentCat).filter(s => !q || `${s.title} ${s.artist} ${s.album}`.toLowerCase().includes(q));
+}
+
+function renderListHeader(items) {
+  const isCat = !['all', 'none'].includes(currentCat);
+  $('#sl-kicker').textContent = currentCat === 'all' ? '曲库' : '歌单';
+  $('#sl-name').textContent = catName(currentCat);
+  $('#sl-cover').replaceChildren(currentCat === 'all'
+    ? h('div', { class: 'sl-cover-img icon', html: ICON_ALL })
+    : playlistCover(currentCat, 'sl-cover-img'));
+  const all = catSongs(currentCat);
+  const withAudio = all.filter(s => s.hasAudio);
   const missing = withAudio.filter(s => ['missing', 'outdated'].includes(cacheState(s)));
   const cached = withAudio.filter(s => cacheState(s) === 'cached');
   const dl = withAudio.filter(s => cacheState(s) === 'downloading');
-  $('#lib-download-all').hidden = !missing.length;
-  $('#lib-download-all').textContent = `全部下载（${missing.length} 首，${fmtSize(missing.reduce((a, s) => a + (s.audioSize || 0), 0))}）`;
-  el.textContent = `本设备已缓存 ${cached.length}/${withAudio.length} 首` + (dl.length ? ` · 下载中 ${dl.length}` : '');
+  $('#lib-count').textContent = `${all.length} 首` + (items.length !== all.length ? `（显示 ${items.length}）` : '');
+  $('#lib-cache-summary').textContent = withAudio.length
+    ? `本设备已缓存 ${cached.length}/${withAudio.length}` + (dl.length ? ` · 下载中 ${dl.length}` : '') : '';
+  const dla = $('#lib-download-all');
+  dla.hidden = !missing.length;
+  dla.textContent = `⬇ 全部下载（${missing.length} 首，${fmtSize(missing.reduce((a, s) => a + (s.audioSize || 0), 0))}）`;
+  dla.title = '把这个歌单里还没缓存的音频都下载到本设备';
+  const add = $('#sl-open');
+  add.hidden = !isCat;
+  add.textContent = '＋ 添加歌曲';
+  $('#sl-more').hidden = !isCat;
 }
 
-// ---------------------------------------------------------------- 拖拽排序（鼠标 / 触屏通用，Pointer Events）
+function renderSongList() {
+  const q = $('#lib-filter').value.trim();
+  const list = $('#lib-list');
+  const items = visibleSongs();
+  list.classList.toggle('filtering', !!q);
+  renderListHeader(items);
+  if (!items.length) {
+    const msg = !state.songs.length ? '曲库为空。点左上「＋ 导入歌曲」导入本地音频与歌词，或联网搜索歌词，都会保存在这里。'
+      : q ? '没有匹配的歌曲'
+        : currentCat === 'none' ? '所有歌都已经放进歌单了。'
+          : '这个歌单还没有歌：点上方「＋ 添加歌曲」，或在「全部歌曲」里把歌拖到左侧这个歌单上。';
+    list.replaceChildren(h('div', { class: 'lib-empty muted', text: msg }));
+    return;
+  }
+  list.replaceChildren(...items.map((s, i) => {
+    const current = state.song?.id === s.id;
+    const row = h('div', {
+      class: `lib-item sl-row${current ? ' current' : ''}`,
+      role: 'button', tabindex: '0', dataset: { id: s.id },
+    });
+    const handle = h('span', { class: 'drag-handle', title: q ? '筛选时不能排序' : '拖动排序（所有设备同步）；拖到左侧歌单上可加入歌单', 'aria-label': '拖动排序', html: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>' });
+    const no = h('span', { class: 'c-no', html: current ? EQ : String(i + 1).padStart(2, '0') });
+    const title = h('div', { class: 'c-title' }, coverEl(s),
+      h('div', { class: 'lib-body', html: `<div class="lib-title" title="${escapeHTML(s.title || '')}">${escapeHTML(s.title || '未命名')}</div>
+        <div class="lib-meta">${songBadges(s, { withCats: currentCat === 'all' })}<span class="lib-artist">${escapeHTML(s.artist || SOURCE_LABEL[s.source] || '')}</span></div>` }));
+    const album = h('span', { class: 'c-album', title: s.album || '', text: s.album || '' });
+    const cache = h('div', { class: 'c-cache' }, cacheWidget(s));
+    const dur = h('span', { class: 'c-dur lib-dur', text: fmtDur(s.duration) });
+    const more = h('button', { type: 'button', class: 'lib-more', title: '歌单 / 歌曲信息', text: '⋯' });
+    more.addEventListener('click', (e) => { e.stopPropagation(); openSongMenu(s, more); });
+    row.append(handle, no, title, album, cache, dur, more);
+    row.addEventListener('click', (e) => { if (!e.target.closest('.drag-handle, .lib-cache, .lib-more')) openFromList(s); });
+    row.addEventListener('keydown', (e) => { if (e.key === 'Enter') openFromList(s); });
+    row.addEventListener('contextmenu', (e) => { e.preventDefault(); openSongMenu(s, more); });
+    handle.addEventListener('pointerdown', (e) => startDrag(e, row));
+    return row;
+  }));
+}
+
+// ---------------------------------------------------------------- 快速选歌抽屉（歌词 / 单词本视图）
+let drawerGroups = (() => {
+  try { const v = localStorage.getItem('jls-drawer-open'); return v ? new Set(JSON.parse(v)) : null; } catch { return null; }
+})();   // 展开的歌单 id；null = 还没操作过（按当前歌曲所在歌单自动展开）
+
+function saveDrawerGroups() {
+  try { localStorage.setItem('jls-drawer-open', JSON.stringify([...drawerGroups])); } catch {}
+}
+
+export function isDrawerOpen() { return !$('#drawer').hidden; }
+
+export function toggleDrawer(force) {
+  const open = force ?? !isDrawerOpen();
+  $('#drawer').hidden = !open;
+  $('#drawer-scrim').hidden = !open;
+  $('#btn-drawer').classList.toggle('active', open);
+  if (!open) { closeMenus(); return; }
+  if (!drawerGroups) {
+    // 第一次打开：展开当前歌曲所在的歌单（没有歌单时展开「全部歌曲」）
+    const cur = state.song ? summaryOf(state.song.id) : null;
+    const first = cur?.categories?.find(id => categories.some(c => c.id === id));
+    drawerGroups = new Set([first || (categories.length ? (cur && !cur.categories?.length ? 'none' : currentCat) : 'all')]);
+  }
+  renderDrawer();
+  const cur = $('#dr-list .dr-song.current');
+  if (cur) cur.scrollIntoView({ block: 'center' });
+}
+
+function drawerSongRow(s) {
+  const current = state.song?.id === s.id;
+  const row = h('button', { type: 'button', class: `dr-song${current ? ' current' : ''}`, dataset: { id: s.id } },
+    coverEl(s, 'dr-cover'),
+    h('span', { class: 'dr-text' },
+      h('span', { class: 'dr-name', text: s.title || '未命名' }),
+      h('span', { class: 'dr-artist', text: s.artist || SOURCE_LABEL[s.source] || '' })),
+    h('span', { class: 'dr-dur', html: current ? EQ : fmtDur(s.duration) }));
+  row.addEventListener('click', async () => {
+    toggleDrawer(false);
+    if (state.song?.id !== s.id) await openSong(s.id);
+    renderLibrary();
+  });
+  row.addEventListener('contextmenu', (e) => { e.preventDefault(); openSongMenu(s, row); });
+  return row;
+}
+
+function renderDrawer() {
+  if (!isDrawerOpen()) return;
+  const list = $('#dr-list');
+  const keep = list.scrollTop;
+  const q = $('#dr-filter').value.trim().toLowerCase();
+  $('#dr-count').textContent = `${categories.length} 个歌单 · ${state.songs.length} 首`;
+  if (q) {
+    const hits = state.songs.filter(s => `${s.title} ${s.artist} ${s.album}`.toLowerCase().includes(q));
+    list.replaceChildren(...(hits.length ? hits.map(drawerSongRow) : [h('div', { class: 'lib-empty muted', text: '没有匹配的歌曲' })]));
+    return;
+  }
+  const groups = [{ id: 'all', name: '全部歌曲' }, ...categories.map(c => ({ id: c.id, name: c.name }))];
+  if (categories.length && catSongs('none').length) groups.push({ id: 'none', name: '未归入歌单' });
+  list.replaceChildren(...groups.map(g => {
+    const songs = catSongs(g.id);
+    const open = drawerGroups.has(g.id);
+    const hasCurrent = !!state.song && songs.some(s => s.id === state.song.id);
+    const head = h('button', { type: 'button', class: `dr-gh${hasCurrent ? ' has-current' : ''}`, 'aria-expanded': String(open) },
+      h('span', { class: 'dr-chev', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>' }),
+      g.id === 'all' ? h('span', { class: 'dr-gcover icon', html: ICON_ALL })
+        : g.id === 'none' ? h('span', { class: 'dr-gcover icon', html: ICON_NONE }) : playlistCover(g.id, 'dr-gcover'),
+      h('span', { class: 'dr-gname', text: g.name }),
+      h('span', { class: 'dr-gcount', text: String(songs.length) }));
+    head.addEventListener('click', () => {
+      if (drawerGroups.has(g.id)) drawerGroups.delete(g.id); else drawerGroups.add(g.id);
+      saveDrawerGroups();
+      renderDrawer();
+    });
+    const box = h('div', { class: `dr-group${open ? ' open' : ''}`, dataset: { cat: g.id } }, head);
+    if (open) {
+      box.append(h('div', { class: 'dr-songs' },
+        ...(songs.length ? songs.map(drawerSongRow) : [h('div', { class: 'dr-empty muted small', text: '这个歌单还没有歌' })])));
+    }
+    return box;
+  }));
+  list.scrollTop = keep;
+}
+
+// ---------------------------------------------------------------- 播放条左下角：当前歌曲
+function renderNowPlaying() {
+  const s = state.song;
+  const box = $('#np');
+  box.classList.toggle('empty', !s);
+  if (!s) {
+    $('#np-cover').replaceChildren(h('div', { class: 'np-cover-img icon', html: ICON_ALL }));
+    $('#np-title').textContent = '未打开歌曲';
+    $('#np-artist').textContent = '从曲库里选一首歌';
+    return;
+  }
+  const sum = summaryOf(s.id) || { id: s.id, title: s.title, coverVersion: '' };
+  $('#np-cover').replaceChildren(coverEl(sum, 'np-cover-img'));
+  $('#np-title').textContent = s.title || '未命名歌曲';
+  $('#np-artist').textContent = s.artist || '';
+}
+
+function renderLibrary() {
+  if (drag) return; // 拖动中不重建列表
+  renderSidebar();
+  renderSongList();
+  renderDrawer();
+  renderNowPlaying();
+  bus.emit('library:rendered');
+}
+
+/** 曲库视图：把当前歌曲滚动到可见位置 */
+export function revealCurrentInList() {
+  const row = $('#lib-list .sl-row.current');
+  if (row) row.scrollIntoView({ block: 'center' });
+}
+
+// ---------------------------------------------------------------- 拖拽：排序 / 拖到歌单（鼠标 / 触屏通用，Pointer Events）
 let drag = null;
 
 function startDrag(e, item) {
-  if ($('#lib-filter').value.trim()) { toast('请先清空筛选再拖动排序'); return; }
+  if ($('#lib-filter').value.trim()) { toast('请先清空搜索再拖动排序'); return; }
   e.preventDefault();
+  closeMenus();
   const list = $('#lib-list');
-  const rect = item.getBoundingClientRect();
-  drag = { item, list, offsetY: e.clientY - rect.top, startOrder: [...list.querySelectorAll('.lib-item')].map(el => el.dataset.id), pointerId: e.pointerId };
+  drag = { item, list, startOrder: [...list.querySelectorAll('.lib-item')].map(el => el.dataset.id), overCat: null };
   item.classList.add('dragging');
-  item.style.setProperty('--drag-y', '0px');
+  document.body.classList.add('lib-dragging');
   e.target.setPointerCapture?.(e.pointerId);
   document.addEventListener('pointermove', onDragMove);
   document.addEventListener('pointerup', endDrag, { once: true });
@@ -140,6 +531,12 @@ function startDrag(e, item) {
 function onDragMove(e) {
   if (!drag) return;
   const { item, list } = drag;
+  // 悬停在左侧某个歌单上：准备加入歌单
+  const under = document.elementFromPoint(e.clientX, e.clientY);
+  const target = under?.closest?.('.pl-item[data-cat]:not(.fixed)');
+  $$('.pl-item.drop').forEach(c => c.classList.remove('drop'));
+  drag.overCat = target ? target.dataset.cat : null;
+  if (target) { target.classList.add('drop'); return; }
   const others = [...list.querySelectorAll('.lib-item:not(.dragging)')];
   let before = null;
   for (const el of others) {
@@ -157,15 +554,37 @@ function onDragMove(e) {
 async function endDrag() {
   document.removeEventListener('pointermove', onDragMove);
   if (!drag) return;
-  const { item, list, startOrder } = drag;
+  const { item, list, startOrder, overCat } = drag;
   drag = null;
   item.classList.remove('dragging');
-  const ids = [...list.querySelectorAll('.lib-item')].map(el => el.dataset.id);
-  if (ids.join() === startOrder.join()) return;
+  document.body.classList.remove('lib-dragging');
+  $$('.pl-item.drop').forEach(c => c.classList.remove('drop'));
+  const songId = item.dataset.id;
+  if (overCat) {
+    // 拖到歌单上：加入歌单（列表顺序不变）
+    try {
+      categories = await api.addToCategory(overCat, [songId]);
+      const s = summaryOf(songId);
+      if (s && !(s.categories || []).includes(overCat)) s.categories = [...(s.categories || []), overCat];
+      toast(`已加入「${catName(overCat)}」`, { ms: 1400 });
+    } catch (err) { toast('加入歌单失败：' + err.message, { error: true }); }
+    renderLibrary();
+    return;
+  }
+  const visible = [...list.querySelectorAll('.lib-item')].map(el => el.dataset.id);
+  if (visible.join() === startOrder.join()) { renderLibrary(); return; }
+  // 在歌单视图里拖动：把它放到整个曲库里「可见的下一首」之前（只改变它在这个歌单里的相对位置）
+  const all = state.songs.map(s => s.id).filter(id => id !== songId);
+  const vi = visible.indexOf(songId);
+  const nextVisible = visible[vi + 1];
+  const prevVisible = visible[vi - 1];
+  let pos = nextVisible ? all.indexOf(nextVisible) : (prevVisible ? all.indexOf(prevVisible) + 1 : all.length);
+  if (pos < 0) pos = all.length;
+  all.splice(pos, 0, songId);
   const byId = new Map(state.songs.map(s => [s.id, s]));
-  state.songs = ids.map(id => byId.get(id)).filter(Boolean);
+  state.songs = all.map(id => byId.get(id)).filter(Boolean);
   try {
-    state.songs = await api.setOrder(ids);
+    state.songs = await api.setOrder(all);
     toast('顺序已保存（其它设备刷新后同步）', { ms: 1400 });
   } catch (err) {
     toast('排序保存失败：' + err.message, { error: true });
@@ -173,10 +592,12 @@ async function endDrag() {
   renderLibrary();
 }
 
+/** 窄屏：歌单侧栏以浮层形式滑出 */
 export function toggleSidebar(force) {
   const open = force ?? !document.body.classList.contains('sidebar-open');
   document.body.classList.toggle('sidebar-open', open);
 }
+
 
 // ---------------------------------------------------------------- NCM 解码（Web Worker，本机完成）
 function decodeNcm(file) {
@@ -188,7 +609,9 @@ function decodeNcm(file) {
       if (d.error) { reject(new Error(d.error)); return; }
       const blob = new Blob([d.buffer.slice(d.offset)], { type: d.mime });
       const ext = { 'audio/flac': 'flac', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/ogg': 'ogg', 'audio/wav': 'wav' }[d.mime] || 'mp3';
-      resolve({ blob, ext, format: d.format, meta: d.meta });
+      // NCM 头部自带专辑封面：一并取出，导入后上传为歌曲封面
+      const cover = d.cover ? new Blob([d.cover]) : null;
+      resolve({ blob, ext, format: d.format, meta: d.meta, cover });
     };
     worker.onerror = (e) => { worker.terminate(); reject(new Error(e.message || 'NCM 解析失败')); };
     worker.postMessage(file);
@@ -202,9 +625,9 @@ export async function prepareAudio(file) {
     const res = await decodeNcm(file);
     setStatus(`NCM 已还原为 ${res.format}`);
     const base = file.name.replace(/\.ncm$/i, '');
-    return { blob: res.blob, filename: `${base}.${res.ext}`, meta: res.meta };
+    return { blob: res.blob, filename: `${base}.${res.ext}`, meta: res.meta, cover: res.cover };
   }
-  return { blob: file, filename: file.name, meta: null };
+  return { blob: file, filename: file.name, meta: null, cover: null };
 }
 
 // ---------------------------------------------------------------- 导入对话框
@@ -400,8 +823,9 @@ async function submitImport() {
   try {
     for (let i = 0; i < jobs.length; i++) {
       const { sg, fd } = jobs[i];
+      let prepared = null;
       if (sg.audio) {
-        const prepared = sg.audio.prepared || await prepareAudio(sg.audio.file);
+        prepared = sg.audio.prepared || await prepareAudio(sg.audio.file);
         fd.append('audio', prepared.blob, prepared.filename);
       }
       setStatus(jobs.length > 1 ? `导入 ${i + 1}/${jobs.length}：${sg.title || ''}` : '正在上传…');
@@ -410,11 +834,15 @@ async function submitImport() {
       });
       created.push(song);
       if (sg.audio && song.audio) await putCached(song, fd.get('audio'));
+      if (prepared?.cover && !song.cover) {
+        try { await api.uploadCover(song.id, prepared.cover, 'ncm'); } catch (e) { console.warn('[cover]', e); }
+      }
     }
     $('#dlg-import').close();
     await refreshLibrary();
     const first = created[0];
     await openSong(first.id);
+    bus.emit('app:mode', 'lyrics');
     renderLibrary();
     toast(created.length > 1 ? `已导入 ${created.length} 首` : `已导入「${first.title}」`);
     setStatus('');
@@ -438,7 +866,44 @@ export function openSongInfo() {
   $('#si-album').value = s.album || '';
   $('#si-audio').textContent = s.audio ? `${s.audio.name}（${(s.audio.size / 1048576).toFixed(1)} MB）` : '未上传';
   $('#si-remove-audio').hidden = !s.audio;
-  $('#dlg-info').showModal();
+  renderInfoCover();
+  renderInfoCategories();
+  if (!$('#dlg-info').open) $('#dlg-info').showModal();
+}
+
+function renderInfoCover() {
+  const sum = summaryOf(state.song.id) || { id: state.song.id, title: state.song.title, coverVersion: '' };
+  $('#si-cover').replaceChildren(coverEl(sum, 'si-cover-img'));
+  const src = { embedded: '来自音频文件', ncm: '来自 NCM', user: '手动上传', online: '联网获取' }[state.song.cover?.source] || '';
+  $('#si-cover-src').textContent = sum.coverVersion ? src : '没有封面';
+  $('#si-cover-remove').hidden = !sum.coverVersion;
+}
+
+function renderInfoCategories() {
+  const box = $('#si-cats');
+  const sum = summaryOf(state.song.id);
+  if (!categories.length) {
+    box.replaceChildren(h('span', { class: 'muted small', text: '还没有歌单，可在曲库左侧「我的歌单」旁点 ＋ 新建。' }));
+    return;
+  }
+  box.replaceChildren(...categories.map(c => {
+    const lab = h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: (sum?.categories || []).includes(c.id) }), c.name);
+    lab.querySelector('input').addEventListener('change', async () => {
+      const ids = [...box.querySelectorAll('input')].map((el, i) => (el.checked ? categories[i].id : null)).filter(Boolean);
+      const res = await api.setSongCategories(state.song.id, ids);
+      if (sum) sum.categories = res.categories;
+      await refreshCategories();
+      renderLibrary();
+    });
+    return lab;
+  }));
+}
+
+async function afterCoverChange(res) {
+  if (res?.cover) state.song.cover = res.cover;
+  await refreshLibrary();
+  bus.emit('cover:changed');
+  if ($('#dlg-info').open) renderInfoCover();
 }
 
 async function replaceAudio(file) {
@@ -449,6 +914,9 @@ async function replaceAudio(file) {
     setStatus('正在上传音频…');
     const song = await api.uploadAudio(s.id, prepared.blob, prepared.filename, p => setStatus(`正在上传音频 ${Math.round(p * 100)}%`));
     await putCached(song, prepared.blob);
+    if (prepared.cover && (!song.cover || song.cover.source !== 'user')) {
+      try { await api.uploadCover(song.id, prepared.cover, 'ncm'); } catch {}
+    }
     state.song.audio = song.audio;
     state.song.updatedAt = song.updatedAt;
     loadSongAudio(state.song);
@@ -463,8 +931,30 @@ async function replaceAudio(file) {
 
 export function initLibrary() {
   $('#lib-filter').addEventListener('input', renderLibrary);
-  $('#btn-sidebar').addEventListener('click', () => toggleSidebar());
+  $('#sl-pl-btn').addEventListener('click', () => toggleSidebar());
   $('#sidebar-scrim').addEventListener('click', () => toggleSidebar(false));
+  // 歌单区：展开 / 收起、新建；歌单视图：添加歌曲、⋯ 菜单
+  $('#pl-toggle').addEventListener('click', () => {
+    plCollapsed = !plCollapsed;
+    try { localStorage.setItem('jls-pl-collapsed', plCollapsed ? '1' : '0'); } catch {}
+    renderSidebar();
+  });
+  $('#pl-add').addEventListener('click', () => newCategory());
+  $('#sl-open').addEventListener('click', (e) => { e.stopPropagation(); openAddSongsMenu(currentCat, e.currentTarget); });
+  $('#sl-more').addEventListener('click', (e) => { e.stopPropagation(); openCatMenu(currentCat, e.currentTarget); });
+  // 播放条左下角：当前歌曲 → 在「歌词」和「曲库」之间切换
+  const npToggle = () => bus.emit('app:mode', state.appMode === 'lyrics' && state.song ? 'list' : (state.song ? 'lyrics' : 'list'));
+  $('#np').addEventListener('click', npToggle);
+  $('#np').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); npToggle(); } });
+  // 快速选歌抽屉
+  $('#btn-drawer').addEventListener('click', (e) => { e.stopPropagation(); toggleDrawer(); });
+  $('#dr-close').addEventListener('click', () => toggleDrawer(false));
+  $('#drawer-scrim').addEventListener('click', () => toggleDrawer(false));
+  $('#dr-filter').addEventListener('input', renderDrawer);
+  $('#dr-collapse').addEventListener('click', () => { drawerGroups = new Set(); saveDrawerGroups(); renderDrawer(); });
+  $('#dr-library').addEventListener('click', () => { toggleDrawer(false); bus.emit('app:mode', 'list'); });
+  $('#dr-list').addEventListener('scroll', closeMenus, { passive: true });
+
   $$('[data-cmd="import"]').forEach(b => b.addEventListener('click', () => openImport([], { pick: true })));
 
   $('#imp-files').addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; if (fs.length) addFiles(fs); });
@@ -500,6 +990,33 @@ export function initLibrary() {
       $('#dlg-info').close();
     } catch (e) { toast('保存失败：' + e.message, { error: true }); }
   });
+  $('#si-cover-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    try { await afterCoverChange(await api.uploadCover(state.song.id, f, 'user')); toast('封面已更新'); }
+    catch (err) { toast('上传失败：' + err.message, { error: true }); }
+  });
+  $('#si-cover-fetch').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = '查找中…';
+    try {
+      const res = await api.fetchCover(state.song.id);
+      await afterCoverChange(res);
+      toast(`已从${res.source}获取封面`);
+    } catch (err) {
+      toast(err.message, { error: true });
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '联网查找封面';
+    }
+  });
+  $('#si-cover-remove').addEventListener('click', async () => {
+    await api.deleteCover(state.song.id);
+    state.song.cover = null;
+    await afterCoverChange(null);
+  });
   $('#si-audio-file').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; replaceAudio(f); });
   $('#si-remove-audio').addEventListener('click', async () => {
     if (!confirm('删除这首歌的音频文件？歌词与修改会保留。')) return;
@@ -517,10 +1034,14 @@ export function initLibrary() {
     state.song = null;
     try { localStorage.removeItem('jls-last-song'); } catch {}
     bus.emit('song:closed');
+    bus.emit('app:mode', 'list');
     refreshLibrary();
   });
   $('#si-cancel').addEventListener('click', () => $('#dlg-info').close());
   bus.on('song:opened', refreshLibrary);
+  bus.on('song:closed', renderLibrary);
+  document.addEventListener('click', (e) => { if (!e.target.closest('.lib-menu, .lib-more, .pl-more, #sl-open, #sl-more')) closeMenus(); });
+  $('#lib-list').addEventListener('scroll', closeMenus, { passive: true });
   // 下载进度：节流刷新列表
   let pending = false;
   bus.on('cache:progress', () => {
@@ -531,7 +1052,8 @@ export function initLibrary() {
   bus.on('cache:changed', refreshCacheIndex);
   bus.on('cache:error', ({ error }) => { if (error?.name !== 'AbortError') toast('下载失败：' + (error?.message || error), { error: true }); renderLibrary(); });
   $('#lib-download-all').addEventListener('click', async () => {
-    const todo = state.songs.filter(s => ['missing', 'outdated'].includes(cacheState(s)));
+    // 只下载当前歌单里的歌（「全部歌曲」= 整个曲库）
+    const todo = catSongs(currentCat).filter(s => ['missing', 'outdated'].includes(cacheState(s)));
     for (const s of todo) {
       try { await downloadAudio(s); } catch (e) { if (e?.name === 'AbortError') continue; }
     }

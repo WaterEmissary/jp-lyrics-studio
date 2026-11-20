@@ -11,7 +11,7 @@ import { renderLineContent, rerenderPreservingScroll } from './render.js';
 import { analyzeText, readingFor, wordsMatchText, setUserDict, getUserDict, isReady, ensureTokenizer } from './analyzer.js';
 import { splitReading, wordKanaToRomaji, wordRomajiToKana, toHiragana, toKatakana, isLatinWord, isKatakanaWord } from './kana.js';
 import { attachRomajiIME } from './ime.js';
-import { lyricTime, playLine } from './player.js';
+import { lyricTime, playLine, pause, clearSegment, isPlaying } from './player.js';
 import { lineStart } from './timing.js';
 
 const HL_COLORS = [
@@ -271,6 +271,9 @@ export function setEditing(on) {
 const ed = { line: null, draft: null, origWords: null, textDirty: false, busy: false };
 
 export function openLineEditor(line, { focusWord = -1 } = {}) {
+  // 打开编辑窗口时暂停播放；关闭后不自动继续（需要手动点播放）
+  if (isPlaying()) pause();
+  clearSegment();
   ed.line = line;
   ed.textDirty = false;
   ed.draft = {
@@ -583,6 +586,7 @@ function initLineEditor() {
 // =============================================================== 全文编辑
 export function openFulltext() {
   if (!state.song) { toast('请先打开或新建一首歌'); return; }
+  if (isPlaying()) pause();
   const lines = state.song.lines || [];
   $('#ft-text').value = lines.map(l => `[${fmtTime(l.time, 2)}]${l.text}`).join('\n');
   $('#ft-keep').checked = true;

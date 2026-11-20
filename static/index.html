@@ -14,9 +14,7 @@
 
 <!-- ============================== 顶栏 ============================== -->
 <header class="topbar">
-  <button id="btn-sidebar" class="icon-btn" type="button" title="曲库" aria-label="曲库">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-  </button>
+  <div class="brand list-only"><span class="brand-logo">歌</span><span class="brand-name">JP Lyrics Studio</span></div>
   <div class="song-head">
     <div class="song-title-row">
       <span id="song-title" class="song-title">JP Lyrics Studio</span>
@@ -26,9 +24,9 @@
   </div>
 
   <nav class="seg app-tabs" aria-label="模式">
-    <button type="button" data-app="lyrics" class="active">歌词</button>
-    <button type="button" data-app="study">学习</button>
-    <button type="button" data-app="vocab">单词本</button>
+    <button type="button" data-app="list" title="曲库：歌单与歌曲列表（点播放条左下角封面也可切换）">曲库</button>
+    <button type="button" data-app="lyrics" class="active" title="歌词练习">歌词</button>
+    <button type="button" data-app="vocab" title="单词本">单词本</button>
   </nav>
 
   <div class="top-actions">
@@ -39,7 +37,6 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg><span>导入</span>
     </button>
     <span class="divider hide-sm"></span>
-    <button id="btn-view" class="btn ghost lyrics-only hide-sm" type="button">跟唱</button>
     <button id="btn-edit-mode" class="btn ghost lyrics-only" type="button" aria-pressed="false" title="编辑模式（E）：点击单词合并 / 拆分 / 高亮">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg><span class="hide-sm">编辑</span>
     </button>
@@ -57,13 +54,6 @@
 
 <!-- 显示设置 -->
 <div id="settings" class="popover settings" hidden>
-  <div class="set-group">
-    <div class="set-label">视图</div>
-    <div class="seg small">
-      <label><input type="radio" name="vm" value="sing" data-set="viewMode" /><span>跟唱（高亮并居中当前句）</span></label>
-      <label><input type="radio" name="vm" value="read" data-set="viewMode" /><span>阅读</span></label>
-    </div>
-  </div>
   <div class="set-group">
     <div class="set-label">歌词布局</div>
     <div class="seg small">
@@ -126,8 +116,8 @@
 <div id="more-menu" class="popover menu" hidden>
   <button type="button" data-cmd="search" class="show-sm">联网搜索歌词</button>
   <button type="button" data-cmd="import" class="show-sm">导入本地歌曲</button>
-  <button type="button" data-app="study" class="show-sm">切换到「学习」模式</button>
-  <button type="button" data-app="lyrics" class="show-sm">切换到「歌词」模式</button>
+  <button type="button" data-app="list" class="show-sm">曲库（歌单 / 歌曲列表）</button>
+  <button type="button" data-app="lyrics" class="show-sm">歌词</button>
   <button type="button" data-app="vocab" class="show-sm">打开「单词本」</button>
   <div class="menu-sep show-sm"></div>
   <button type="button" data-cmd="info">歌曲信息 / 更换音频</button>
@@ -147,39 +137,71 @@
 
 <!-- ============================== 主体 ============================== -->
 <div class="layout">
-  <aside class="sidebar" aria-label="曲库">
-    <div class="sidebar-head">
-      <div class="sidebar-title">曲库 <span id="lib-count" class="muted small">0</span></div>
-      <button class="btn small primary" type="button" data-cmd="import">＋ 导入</button>
+  <!-- 左侧：歌单（只在「曲库」视图显示；窄屏时从列表头部的「歌单」按钮滑出） -->
+  <aside class="sidebar" aria-label="歌单">
+    <div class="sb-actions">
+      <button class="btn small primary" type="button" data-cmd="import">＋ 导入歌曲</button>
+      <button class="btn small" type="button" data-cmd="search" title="联网搜索歌词（网易云 / LRCLIB）">联网搜索</button>
     </div>
-    <input id="lib-filter" class="input" type="search" placeholder="筛选歌名 / 歌手" />
-    <div id="lib-list" class="lib-list"></div>
-    <div class="sidebar-foot">
-      <div class="cache-summary">
-        <span id="lib-cache-summary" class="muted small"></span>
-        <button id="lib-download-all" class="btn small" type="button" hidden>全部下载</button>
+    <nav id="pl-fixed" class="pl-nav" aria-label="曲库"></nav>
+    <div class="pl-section">
+      <div class="pl-sec-head">
+        <button id="pl-toggle" class="pl-sec-title" type="button" aria-expanded="true" title="展开 / 收起歌单">
+          <span>我的歌单</span><span id="pl-count" class="muted small"></span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
+        </button>
+        <button id="pl-add" class="icon-btn tiny" type="button" title="新建歌单" aria-label="新建歌单">＋</button>
       </div>
-      <button class="btn small ghost block" type="button" data-cmd="search">🔍 联网搜索歌词</button>
+      <nav id="pl-list" class="pl-nav pl-list" aria-label="我的歌单"></nav>
     </div>
   </aside>
   <div id="sidebar-scrim" class="scrim"></div>
 
   <main class="main">
+    <!-- 曲库视图：当前歌单的歌曲列表 -->
+    <section id="songlist" class="songlist" aria-label="歌曲列表">
+      <header class="sl-head">
+        <button id="sl-pl-btn" class="btn small sl-pl-btn" type="button" title="选择歌单">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h10M4 18h10"/><path d="M17 14v6M14 17h6"/></svg><span>切换歌单</span>
+        </button>
+        <div id="sl-cover" class="sl-cover"></div>
+        <div class="sl-info">
+          <div class="sl-kicker muted small" id="sl-kicker">歌单</div>
+          <h2 id="sl-name" class="sl-name">全部歌曲</h2>
+          <div class="sl-meta"><span id="lib-count" class="muted small"></span><span id="lib-cache-summary" class="muted small"></span></div>
+          <div class="sl-actions">
+            <button id="sl-open" class="btn small primary" type="button" hidden></button>
+            <button id="lib-download-all" class="btn small" type="button" hidden>全部下载</button>
+            <button id="sl-more" class="btn small" type="button" hidden title="重命名 / 删除歌单">⋯</button>
+          </div>
+        </div>
+        <input id="lib-filter" class="input sl-filter" type="search" placeholder="搜索歌名 / 歌手 / 专辑" />
+      </header>
+      <div class="sl-table">
+        <div class="sl-row sl-th" aria-hidden="true">
+          <span></span><span class="c-no">#</span><span>标题</span><span class="c-album">专辑</span><span class="c-cache">本设备</span><span class="c-dur">时长</span><span></span>
+        </div>
+        <div id="lib-list" class="lib-list"></div>
+      </div>
+    </section>
+
     <section id="lyrics" class="lyrics" tabindex="0" aria-label="歌词"></section>
 
-    <section id="study" class="study" aria-label="日语学习">
-      <div class="study-panel">
-        <textarea id="study-input" rows="4" lang="ja" placeholder="输入日语句子，自动分词并标注假名与罗马音（Ctrl+Enter 转换）&#10;例：風に触った中で、君の声が聞こえた。"></textarea>
-        <div class="study-actions">
-          <button id="study-convert" class="btn primary" type="button">转换</button>
-          <button id="study-speak" class="btn" type="button">朗读全部</button>
-          <button id="study-clear" class="btn ghost" type="button">清空</button>
-          <select id="study-voice" class="input select" aria-label="朗读音色"></select>
-        </div>
-        <div id="study-status" class="status-line"></div>
-      </div>
-      <div id="study-results" class="study-results"></div>
-    </section>
+    <!-- 歌词缩略图（类似 CodeGlance）：看整首状态、拖动快速定位 -->
+    <div id="minimap" class="minimap" hidden title="歌词缩略图：点击或拖动定位；橙色 = 关注的难句">
+      <div id="mm-track" class="mm-track"></div>
+      <div id="mm-view" class="mm-view"></div>
+      <div id="mm-tip" class="mm-tip" hidden></div>
+    </div>
+
+    <!-- 歌词区右下角悬浮按钮：快速切换显示内容 -->
+    <div id="lyric-fab" class="lyric-fab" aria-label="显示切换">
+      <button type="button" class="fab" data-fab="kana" title="假名注音：平假名 → 片假名 → 隐藏">あ</button>
+      <button type="button" class="fab" data-fab="romaji" title="显示 / 隐藏罗马音">Ro</button>
+      <button type="button" class="fab" data-fab="zh" title="显示 / 隐藏中文翻译">译</button>
+      <button type="button" class="fab" data-fab="font" title="字号：标准 → 大 → 特大 → 小">T<small>T</small></button>
+    </div>
+
 
     <section id="vocab" class="vocab" aria-label="单词本">
       <div class="vb-toolbar">
@@ -203,6 +225,19 @@
     </section>
   </main>
 </div>
+
+<!-- 快速选歌抽屉（歌词 / 单词本视图里从播放条右侧切出）：歌单可展开 / 收起，歌直接放在歌单里 -->
+<aside id="drawer" class="drawer" aria-label="快速选歌" hidden>
+  <div class="dr-head">
+    <div class="dr-title">歌单 <span id="dr-count" class="muted small"></span></div>
+    <button id="dr-collapse" class="btn small ghost" type="button" title="全部收起">收起全部</button>
+    <button id="dr-library" class="btn small ghost" type="button" title="打开曲库视图管理歌单">曲库</button>
+    <button id="dr-close" class="icon-btn tiny" type="button" aria-label="关闭">×</button>
+  </div>
+  <input id="dr-filter" class="input dr-filter" type="search" placeholder="搜索全部歌曲" />
+  <div id="dr-list" class="dr-list"></div>
+</aside>
+<div id="drawer-scrim" class="drawer-scrim" hidden></div>
 
 <!-- 音频未缓存提示条（可选下载到本设备，带进度） -->
 <div id="audio-banner" class="audio-banner" hidden>
@@ -240,6 +275,14 @@
 
 <!-- ============================== 播放条 ============================== -->
 <footer class="player">
+  <div id="np" class="np" role="button" tabindex="0" title="切换 歌词 / 曲库">
+    <div id="np-cover" class="np-cover"></div>
+    <div class="np-text">
+      <div id="np-title" class="np-title">未打开歌曲</div>
+      <div id="np-artist" class="np-artist"></div>
+    </div>
+    <svg class="np-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
+  </div>
   <div class="player-main">
     <button id="btn-prev" class="icon-btn" type="button" title="上一句（←）" aria-label="上一句">
       <svg viewBox="0 0 24 24"><path d="M6 5h2v14H6zM19 5v14L9 12z" fill="currentColor"/></svg>
@@ -251,8 +294,12 @@
     <button id="btn-back5" class="icon-btn hide-sm" type="button" title="后退 3 秒" aria-label="后退 3 秒">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v4h4"/></svg>
     </button>
+    <button id="btn-linemode" class="btn small linemode" type="button" title="行内 ▶ 按钮：单句 = 只播这一句后自动停；连续 = 从这一句开始继续播放（M）"></button>
     <button id="btn-loop" class="icon-btn" type="button" title="单句循环（R）" aria-label="单句循环">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l3 3-3 3"/><path d="M4 11V9a3 3 0 0 1 3-3h13"/><path d="M7 21l-3-3 3-3"/><path d="M20 13v2a3 3 0 0 1-3 3H4"/></svg>
+    </button>
+    <button id="btn-drawer" class="icon-btn" type="button" title="歌单 / 快速选歌（L）" aria-label="歌单 / 快速选歌">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11M4 11h11M4 16h7"/><circle cx="17" cy="17" r="2.2"/><path d="M19.2 17V7.5l2.3 1"/></svg>
     </button>
   </div>
   <div class="player-seek">
@@ -467,6 +514,22 @@
       <label class="field"><span>歌手</span><input id="si-artist" class="input" /></label>
     </div>
     <label class="field"><span>专辑</span><input id="si-album" class="input" /></label>
+    <div class="field">
+      <div class="field-label">封面 <span id="si-cover-src" class="muted small"></span></div>
+      <div class="si-cover-row">
+        <div id="si-cover" class="si-cover"></div>
+        <div class="si-cover-actions">
+          <label class="btn small"><input id="si-cover-file" type="file" accept="image/*" hidden />上传图片</label>
+          <button id="si-cover-fetch" class="btn small" type="button" title="按歌名 / 歌手从网易云、iTunes 查找专辑封面">联网查找封面</button>
+          <button id="si-cover-remove" class="btn small ghost" type="button">移除封面</button>
+          <span class="muted small">导入时会自动读取音频文件（mp3 / flac / m4a / ncm）自带的封面</span>
+        </div>
+      </div>
+    </div>
+    <div class="field">
+      <div class="field-label">所属歌单</div>
+      <div id="si-cats" class="chips"></div>
+    </div>
     <div class="field">
       <div class="field-label">音频</div>
       <div class="form-row">

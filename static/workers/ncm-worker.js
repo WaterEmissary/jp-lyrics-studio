@@ -97,6 +97,9 @@ function decodeNcm(buffer) {
   const coverLength = readLength();
   const imageLength = readLength();
   if (imageLength > coverLength) throw new Error('NCM 封面数据损坏。');
+  requireBytes(coverLength);
+  // 封面图片（专辑图）：复制出来单独上传，显示在曲库歌名前
+  const cover = imageLength > 0 ? data.slice(offset, offset + imageLength) : null;
   skip(coverLength);
   if (offset >= data.length) throw new Error('NCM 文件没有音频数据。');
   const audio = data.subarray(offset);
@@ -104,14 +107,16 @@ function decodeNcm(buffer) {
     const j = (i + 1) & 255;
     audio[i] ^= box[(box[j] + box[(box[j] + j) & 255]) & 255];
   }
-  return { ...identifyAudio(audio), offset, meta };
+  return { ...identifyAudio(audio), offset, meta, cover };
 }
 
 self.onmessage = async event => {
   try {
     const buffer = await event.data.arrayBuffer();
     const result = decodeNcm(buffer);
-    self.postMessage({ ...result, buffer }, [buffer]);
+    const transfer = [buffer];
+    if (result.cover) transfer.push(result.cover.buffer);
+    self.postMessage({ ...result, buffer }, transfer);
   } catch (error) {
     self.postMessage({ error: error.message || 'NCM 文件读取或转换失败。' });
   }
