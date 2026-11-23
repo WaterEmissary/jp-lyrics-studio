@@ -157,6 +157,19 @@
   </aside>
   <div id="sidebar-scrim" class="scrim"></div>
 
+  <!-- 快速选歌（歌词 / 单词本视图）：从左侧展开并一直保持，再点歌单按钮或 × 关闭；歌直接放在歌单里，歌单可展开 / 收起 -->
+  <aside id="drawer" class="drawer" aria-label="快速选歌">
+    <div class="dr-head">
+      <div class="dr-title">歌单 <span id="dr-count" class="muted small"></span></div>
+      <button id="dr-collapse" class="btn small ghost" type="button" title="全部收起">收起全部</button>
+      <button id="dr-library" class="btn small ghost" type="button" title="打开曲库视图管理歌单">曲库</button>
+      <button id="dr-close" class="icon-btn tiny" type="button" aria-label="关闭">×</button>
+    </div>
+    <input id="dr-filter" class="input dr-filter" type="search" placeholder="搜索全部歌曲" />
+    <div id="dr-list" class="dr-list"></div>
+  </aside>
+  <div id="drawer-scrim" class="drawer-scrim"></div>
+
   <main class="main">
     <!-- 曲库视图：当前歌单的歌曲列表 -->
     <section id="songlist" class="songlist" aria-label="歌曲列表">
@@ -226,18 +239,6 @@
   </main>
 </div>
 
-<!-- 快速选歌抽屉（歌词 / 单词本视图里从播放条右侧切出）：歌单可展开 / 收起，歌直接放在歌单里 -->
-<aside id="drawer" class="drawer" aria-label="快速选歌" hidden>
-  <div class="dr-head">
-    <div class="dr-title">歌单 <span id="dr-count" class="muted small"></span></div>
-    <button id="dr-collapse" class="btn small ghost" type="button" title="全部收起">收起全部</button>
-    <button id="dr-library" class="btn small ghost" type="button" title="打开曲库视图管理歌单">曲库</button>
-    <button id="dr-close" class="icon-btn tiny" type="button" aria-label="关闭">×</button>
-  </div>
-  <input id="dr-filter" class="input dr-filter" type="search" placeholder="搜索全部歌曲" />
-  <div id="dr-list" class="dr-list"></div>
-</aside>
-<div id="drawer-scrim" class="drawer-scrim" hidden></div>
 
 <!-- 音频未缓存提示条（可选下载到本设备，带进度） -->
 <div id="audio-banner" class="audio-banner" hidden>

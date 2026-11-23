@@ -185,9 +185,9 @@ function initKeyboard() {
     if (isTypingTarget(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.querySelector('dialog[open]')) return;
     const k = e.key;
-    if (k === 'Escape' && isDrawerOpen()) { toggleDrawer(false); return; }
+    if (k === 'Escape' && isDrawerOpen() && window.matchMedia('(max-width: 900px)').matches) { toggleDrawer(false); return; }
+    if (k === 'l' || k === 'L') { toggleDrawer(); return; }
     if (state.appMode === 'vocab') return;
-    if (k === 'l' || k === 'L') { if (state.appMode === 'lyrics') toggleDrawer(); else setAppMode('lyrics'); return; }
     if (state.appMode !== 'lyrics') {
       // 曲库视图：只保留播放相关的快捷键
       if (k === ' ' || e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -226,8 +226,8 @@ function setAppMode(mode) {
   $$('button[data-app]').forEach(b => b.classList.toggle('active', b.dataset.app === mode));
   try { localStorage.setItem('jls-app', mode); } catch {}
   toggleSidebar(false);
+  bus.emit('app:changed', mode);
   if (mode === 'list') {
-    toggleDrawer(false);
     setTimeout(revealCurrentInList, 0);
   } else if (mode === 'vocab') {
     openVocab();

@@ -17,6 +17,8 @@ export const player = {
   timerStartedAt: 0,      // performance.now()
   segment: null,          // {lineId, start, end, loop}
   hasAudio: false,
+  pendingWhy: 'missing',  // 未缓存的原因：missing（本设备没有）| outdated（本设备是旧版本）
+  pendingPlay: null,      // 想播放时本设备还没有这首歌：{time} 记下位置，选好「下载 / 在线播放」后从这里开始
 };
 
 // ------------------------------------------------------------ 时间
@@ -55,10 +57,18 @@ export function play() {
     }
     startLoop();
   } else if (player.hasAudio) {
-    if (player.audioSource === 'pending' || player.audioSource === 'downloading') {
-      // 还没缓存：先在线播放（下载在后台继续，完成后无缝切换到本地缓存）
-      streamCurrent();
-      if (player.audioSource === 'stream') toast('在线播放中；可点「下载到本设备」缓存，下次秒开', { ms: 2200 });
+    const src = player.audioSource;
+    if (src === 'pending' && audioMode() === 'ask') {
+      // 本设备还没有这首歌：要播放时才询问「下载到本设备 / 在线播放」，选好后从这里开始播
+      player.pendingPlay = { time: audio().currentTime || 0 };
+      showAudioBanner(state.song, player.pendingWhy);
+      updatePlayUI();
+      return;
+    }
+    if (src === 'pending' || src === 'downloading') {
+      // 还没缓存好：先在线播放（下载在后台继续，完成后无缝切换到本地缓存）
+      streamFrom(audio().currentTime || 0);
+      toast('在线播放中；下载完成后自动切换到本设备缓存', { ms: 2200 });
     }
     audio().play().catch(e => toast('播放失败：' + e.message, { error: true }));
   } else {
@@ -172,6 +182,7 @@ export async function loadSongAudio(song) {
   pause();
   resetSrc();
   hideAudioBanner();
+  player.pendingPlay = null;
   player.timerBase = 0;
   player.timerRunning = false;
   if (song?.audio) {
@@ -182,14 +193,13 @@ export async function loadSongAudio(song) {
     if (token !== loadToken) return;
     if (rec && rec.version === versionOf(song)) {
       useBlob(rec.blob);
-    } else if (downloads.has(song.id)) {
-      setSource('downloading');
-      showAudioBanner(song, rec ? 'outdated' : 'missing');
     } else {
+      // 本设备没有（或是旧版本）：打开时不弹提示，真正要播放时再问（见 play()）
+      player.pendingWhy = rec ? 'outdated' : 'missing';
       const mode = audioMode();
-      if (mode === 'stream') useStream(song);
-      else if (mode === 'auto') { startDownload(song); showAudioBanner(song, rec ? 'outdated' : 'missing'); }
-      else showAudioBanner(song, rec ? 'outdated' : 'missing');
+      if (downloads.has(song.id)) setSource('downloading');
+      else if (mode === 'stream') useStream(song);
+      else if (mode === 'auto') startDownload(song);
     }
   } else {
     player.hasAudio = false;
@@ -244,6 +254,15 @@ function streamCurrent() {
   if (!state.song?.audio) return;
   useStream(state.song);
   updateBannerProgress(state.song.id);
+}
+
+/** 改为在线播放，并保持（未加载前选定的）播放位置 */
+function streamFrom(time) {
+  streamCurrent();
+  if (time > 0) {
+    const a = audio();
+    a.addEventListener('loadedmetadata', () => { a.currentTime = time; }, { once: true });
+  }
 }
 
 export function setMode(mode, { quiet = false } = {}) {
@@ -696,17 +715,33 @@ export function initPlayer() {
   // 「以后都这样」勾选后，点哪个按钮就记住哪种方式（本设备有效，显示设置里可改回「每次询问」）
   const remember = (mode) => { if ($('#ab-remember').checked) { setAudioMode(mode); bus.emit('audio-mode:changed', mode); } };
   $('#ab-download').addEventListener('click', () => { remember('auto'); if (state.song) startDownload(state.song); });
-  $('#ab-stream').addEventListener('click', () => { remember('stream'); streamCurrent(); play(); });
+  $('#ab-stream').addEventListener('click', () => {
+    remember('stream');
+    const want = player.pendingPlay;
+    player.pendingPlay = null;
+    streamFrom(want ? want.time : (audio().currentTime || 0));
+    hideAudioBanner();
+    play();
+  });
   $('#ab-cancel').addEventListener('click', () => state.song && cancelDownload(state.song.id));
-  $('#ab-close').addEventListener('click', hideAudioBanner);
+  $('#ab-close').addEventListener('click', () => { player.pendingPlay = null; hideAudioBanner(); });
   bus.on('cache:progress', ({ id }) => updateBannerProgress(id));
   bus.on('cache:done', async ({ id }) => {
     if (state.song?.id !== id) return;
     const rec = await getCached(id);
     if (rec && state.song?.id === id) {
+      const want = player.pendingPlay;
+      player.pendingPlay = null;
       useBlob(rec.blob);
       hideAudioBanner();
-      toast('已缓存到本设备，之后打开无需再下载');
+      if (want) {
+        // 是点了播放才开始下载的：下载完从刚才的位置开始播
+        const a = audio();
+        a.addEventListener('loadedmetadata', () => { a.currentTime = want.time; play(); }, { once: true });
+        toast('已缓存到本设备，开始播放', { ms: 1600 });
+      } else {
+        toast('已缓存到本设备，之后打开无需再下载');
+      }
     }
   });
   bus.on('cache:error', ({ id, error }) => {

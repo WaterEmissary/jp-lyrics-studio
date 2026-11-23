@@ -1,4 +1,4 @@
-// 歌词缩略图（类似 CodeGlance）：歌词区右侧一条竖向缩略图，
+// 歌词缩略图（类似 CodeGlance）：占满歌词区右侧的一条竖向缩略图，
 //   * 每一句画成一根横条（长度 ≈ 这句的长度），位置与歌词区实际排版一一对应；
 //   * 颜色：关注的难句（橙）、手动编辑过（蓝点）、当前句（实色）、已唱过（深灰）；
 //   * 半透明框 = 当前可见范围，可以拖动；点击任意位置跳过去；悬停显示这一句的原文。
@@ -37,7 +37,7 @@ export function renderMinimap() {
     const len = [...(ln.text || '')].length;
     bar.style.top = `${el.offsetTop * scale}px`;
     bar.style.height = `${Math.max(2, Math.min(6, el.offsetHeight * scale * 0.55))}px`;
-    bar.style.width = `${Math.round(18 + 78 * Math.min(1, len / 26))}%`;
+    bar.style.width = `calc((100% - 18px) * ${(0.2 + 0.8 * Math.min(1, len / 26)).toFixed(3)})`;   // 左 10px + 右留 8px
     if (ln.focus) bar.classList.add('focus');
     if (ln.wordsEdited || ln.romaji) bar.classList.add('edited');
     frag.append(bar);

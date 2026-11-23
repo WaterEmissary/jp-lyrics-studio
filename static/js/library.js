@@ -1,6 +1,6 @@
 // 曲库（参考网易云音乐的布局）：
 //   * 「曲库」视图：左侧歌单（全部歌曲 / 未归入歌单 / 我的歌单，可展开收起），右侧当前歌单的歌曲列表；
-//   * 「歌词」「单词本」视图：从播放条的歌单按钮切出「快速选歌」抽屉——歌直接放在各个歌单里，歌单可展开 / 收起；
+//   * 「歌词」「单词本」视图：播放条的歌单按钮在左侧展开「快速选歌」栏并一直停靠——歌直接放在各个歌单里，歌单可展开 / 收起；
 //   * 播放条左下角显示当前歌曲（封面 + 歌名），点击在「歌词」与「曲库」之间切换；
 //   * 另外负责：导入本地歌曲（音频 / NCM / LRC）、歌曲信息编辑（封面、所属歌单、音频）。
 import { $, $$, h, escapeHTML, toast, bus, setStatus } from './util.js';
@@ -318,7 +318,7 @@ function songBadges(s, { withCats = false } = {}) {
 // 正在播放的小动画（当前歌曲在列表里的序号位置）
 const EQ = '<span class="eq" aria-label="当前歌曲"><i></i><i></i><i></i></span>';
 
-/** 从列表 / 抽屉打开一首歌并切到歌词视图 */
+/** 从列表 / 快速选歌打开一首歌并切到歌词视图 */
 async function openFromList(s, { toLyrics = true } = {}) {
   closeMenus();
   if (state.song?.id !== s.id) await openSong(s.id);
@@ -396,7 +396,11 @@ function renderSongList() {
   }));
 }
 
-// ---------------------------------------------------------------- 快速选歌抽屉（歌词 / 单词本视图）
+// ---------------------------------------------------------------- 快速选歌（歌词 / 单词本视图，停靠在左侧）
+// 打开后一直保持（切歌不关闭），再点播放条上的歌单按钮或 × 才关闭；宽屏下记住开关状态。窄屏时是浮层，选歌后自动关闭。
+let drawerOpen = (() => {
+  try { return localStorage.getItem('jls-drawer') === '1' && !window.matchMedia(NARROW).matches; } catch { return false; }
+})();
 let drawerGroups = (() => {
   try { const v = localStorage.getItem('jls-drawer-open'); return v ? new Set(JSON.parse(v)) : null; } catch { return null; }
 })();   // 展开的歌单 id；null = 还没操作过（按当前歌曲所在歌单自动展开）
@@ -405,14 +409,19 @@ function saveDrawerGroups() {
   try { localStorage.setItem('jls-drawer-open', JSON.stringify([...drawerGroups])); } catch {}
 }
 
-export function isDrawerOpen() { return !$('#drawer').hidden; }
+/** 快速选歌当前是否可见（曲库视图有自己的歌单栏，那里不显示） */
+export function isDrawerOpen() { return drawerOpen && state.appMode !== 'list'; }
 
 export function toggleDrawer(force) {
   const open = force ?? !isDrawerOpen();
-  $('#drawer').hidden = !open;
-  $('#drawer-scrim').hidden = !open;
-  $('#btn-drawer').classList.toggle('active', open);
+  drawerOpen = open;
+  document.body.classList.toggle('drawer-open', open);
+  if (!window.matchMedia(NARROW).matches) {
+    try { localStorage.setItem('jls-drawer', open ? '1' : '0'); } catch {}
+  }
+  bus.emit('minimap:render');   // 歌词区宽度变了
   if (!open) { closeMenus(); return; }
+  if (state.appMode === 'list') bus.emit('app:mode', 'lyrics');
   if (!drawerGroups) {
     // 第一次打开：展开当前歌曲所在的歌单（没有歌单时展开「全部歌曲」）
     const cur = state.song ? summaryOf(state.song.id) : null;
@@ -433,7 +442,7 @@ function drawerSongRow(s) {
       h('span', { class: 'dr-artist', text: s.artist || SOURCE_LABEL[s.source] || '' })),
     h('span', { class: 'dr-dur', html: current ? EQ : fmtDur(s.duration) }));
   row.addEventListener('click', async () => {
-    toggleDrawer(false);
+    if (window.matchMedia(NARROW).matches) toggleDrawer(false);   // 宽屏保持打开，方便连续切歌
     if (state.song?.id !== s.id) await openSong(s.id);
     renderLibrary();
   });
@@ -446,7 +455,7 @@ function renderDrawer() {
   const list = $('#dr-list');
   const keep = list.scrollTop;
   const q = $('#dr-filter').value.trim().toLowerCase();
-  $('#dr-count').textContent = `${categories.length} 个歌单 · ${state.songs.length} 首`;
+  $('#dr-count').textContent = `${state.songs.length} 首`;
   if (q) {
     const hits = state.songs.filter(s => `${s.title} ${s.artist} ${s.album}`.toLowerCase().includes(q));
     list.replaceChildren(...(hits.length ? hits.map(drawerSongRow) : [h('div', { class: 'lib-empty muted', text: '没有匹配的歌曲' })]));
@@ -946,13 +955,15 @@ export function initLibrary() {
   const npToggle = () => bus.emit('app:mode', state.appMode === 'lyrics' && state.song ? 'list' : (state.song ? 'lyrics' : 'list'));
   $('#np').addEventListener('click', npToggle);
   $('#np').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); npToggle(); } });
-  // 快速选歌抽屉
+  // 左侧快速选歌栏
   $('#btn-drawer').addEventListener('click', (e) => { e.stopPropagation(); toggleDrawer(); });
   $('#dr-close').addEventListener('click', () => toggleDrawer(false));
   $('#drawer-scrim').addEventListener('click', () => toggleDrawer(false));
   $('#dr-filter').addEventListener('input', renderDrawer);
   $('#dr-collapse').addEventListener('click', () => { drawerGroups = new Set(); saveDrawerGroups(); renderDrawer(); });
-  $('#dr-library').addEventListener('click', () => { toggleDrawer(false); bus.emit('app:mode', 'list'); });
+  $('#dr-library').addEventListener('click', () => bus.emit('app:mode', 'list'));
+  document.body.classList.toggle('drawer-open', drawerOpen);
+  bus.on('app:changed', () => { if (isDrawerOpen()) { renderDrawer(); bus.emit('minimap:render'); } });
   $('#dr-list').addEventListener('scroll', closeMenus, { passive: true });
 
   $$('[data-cmd="import"]').forEach(b => b.addEventListener('click', () => openImport([], { pick: true })));
