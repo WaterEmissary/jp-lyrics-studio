@@ -1,4 +1,4 @@
-# JP Lyrics Studio · 日语歌曲跟唱练习
+# JP Lyrics Studio · 日语 / 韩语歌曲跟唱练习
 
 由原纯前端项目 [JP Lyrics Sing（日语跟唱）](#致谢) 重构而来：**Python (FastAPI) 后端 + SQLite + 无构建步骤的静态前端（原生 ES Modules）**。
 上传的音频、歌词，以及对分词 / 读音 / 罗马音 / 标记的所有修改都保存在服务端 `data/` 目录（SQLite 数据库 + 音频文件），下次打开无需重复上传和修改。
@@ -48,6 +48,7 @@ python run.py --reload        # 开发模式，改后端代码自动重载
 | 播放 | 本地音频 / 计时器（配合外部播放器）两种音源；**全局倍速** 0.5–1.5×（变速保持音高，可关）；歌词偏移 ±0.1s 微调与**一键「对齐」**（A）；每行 ▶ 的行为由播放条上的「**单句 / 连续**」按钮（M）切换：单句 = 只播这一句后停下（再点停止），连续 = 从这句开始正常往下播；**单句循环**（起止按逐字时间或音拍估算，不会切进下一句）；上/下一句；逐字 KTV 进度（无逐字数据时按音拍加权）；当前句自动居中 |
 | 打轴 | 纯文本歌词边听边按 `T` 给每句打时间，完成后时间轴变为「同步」 |
 | 分词显示 | kuromoji 分词后按「文节」组合成单词（`風に`、`触った`、`中で`）；单词样式：边框 / 交替底色 / 下划线 / 无，可「仅长句启用」；布局：分行（原文 / 罗马音 / 中文）或**逐词对照**（每个词竖排：注音-汉字-罗马音）；悬停原文词 ↔ 罗马音词互相高亮 |
+| 韩语歌 | 含韩文的行（以及韩语歌里的纯英文行）不走日语分词：按空格分词，**按实际发音规则转成罗马字**（国语罗马字表记法 RR，处理连音、鼻音化、流音化、送气化、腭化、ㅎ 脱落等：`잊혀지지 않아` → `ichyeojiji ana`，`같아` → `gata`，`찾는` → `channeun`）；「注音」显示为**发音韩文**，只标在发生音变的字上方（`같아` 上方标 `가타`），悬浮按钮变成「발」开关。行编辑器里读音框填发音韩文，改了自动重算罗马字（也可直接改罗马字）。韩语歌不查 Marumaru，机器翻译按韩语→中文；韩文 + 中文双语 LRC 同样自动合并翻译。整首歌的语言按「含韩文的行 vs 含假名的行」自动判断，无需设置 |
 | 关注难句 | 每行的 ⚑ 按钮（或 F 键标记当前句）把难句设为「关注」，橙色高亮显示；练熟后再点一次取消。存服务端（`line.focus`），不进修改历史 |
 | 缩略图 | 占满歌词区右侧的 CodeGlance 式缩略图（宽度 `--mm-w`）：每句一根横条（位置与实际排版对应），橙 = 关注、蓝点 = 手动改过、实色 = 当前句、深色 = 已唱过；半透明框为当前可见范围，可拖动、点击跳转，悬停显示该句原文。窄屏（≤720px）隐藏 |
 | 悬浮按钮 | 位于歌词与右侧缩略图之间（靠缩略图一侧）的圆形按钮，快速切换：注音（平假名 → 片假名 → 隐藏）、罗马音、中文、字号（与设置面板同步） |
@@ -80,6 +81,7 @@ jp-lyrics-studio/
 │   ├── lib/          kuromoji.js（分词）、aes-js（NCM）
 │   └── dict/         kuromoji IPADIC 词典（17MB，长缓存）
 ├── tests/test_backend.py
+├── tests/test_hangul.mjs   韩语发音 / 罗马字单测（node ≥ 22，pytest 会自动调用）
 └── data/             运行时生成，已在 .gitignore 中忽略（不要提交）
     ├── studio.db     SQLite 数据库（WAL 模式，旁边的 -wal / -shm 是正常的）
     ├── audio/        上传的音频 <song_id>.<ext>
@@ -212,7 +214,8 @@ jp-lyrics-studio/
 | `api.js` | 所有后端请求（含上传进度） | `api` |
 | `util.js` | `$`、`h()` 建元素、toast、状态栏、事件总线 `bus` | – |
 | `kana.js` | 纯函数：平/片假名互转、假名→罗马音（Hepburn）、**罗马音→假名** `romajiToKana` / `wordRomajiToKana`、**注音对齐** `alignRuby`、按切点拆读音 `splitReading` | – |
-| `analyzer.js` | kuromoji 加载、**文节式分组** `attaches()`、罗马音分段、词典预切分、Marumaru 注音覆盖 | `analyzeText`, `ensureTokenizer`, `lineRomaji` |
+| `hangul.js` | 纯函数：韩文音节分解、**发音规则** `pronounceKorean`（只在一个词内应用）、**按发音转 RR 罗马字** `romanizeKorean`、一行 → words `koreanWords`、注音 HTML `koreanRubyHTML` | `romanizeKorean`, `koreanWords`, `hasHangul` |
+| `analyzer.js` | 语言判断 `detectSongLang` / `lineLang`（韩语行交给 hangul.js，不加载日语词典）；kuromoji 加载、**文节式分组** `attaches()`、罗马音分段、词典预切分、Marumaru 注音覆盖 | `analyzeText`, `ensureTokenizer`, `lineRomaji` |
 | `render.js` | 行/单词 HTML（分行 & 逐词对照）、显示设置 → body class | `renderSong`, `renderLineContent`, `applyDisplayClasses` |
 | `player.js` | 音源、倍速、同步高亮、KTV 逐字进度、单句播放/循环、偏移微调与对齐、打轴 | `player`, `setRate`, `playLine`, `seekLyric`, `calibrateOffset` … |
 | `timing.js` | **时间轴计算**：句子实际起止（逐字 / 音拍估算）、粗粒度逐字数据修复、每拍秒数、单句区间、KTV 加权进度 | `lineStart`, `sungEnd`, `segmentRange`, `karaokeProgress`, `effectiveTiming` |
@@ -227,6 +230,12 @@ jp-lyrics-studio/
 | `export.js` | 导出 TXT / LRC | – |
 
 主要 `bus` 事件：`song:opened`、`song:reload {keepPosition}`、`song:changed`、`song:reanalyze`、`song:closed`、`settings:patch`、`search:open {q, bind}`、`library:refresh`、`library:rendered`、`minimap:render`、`word:click`、`line:active`。
+
+### 韩语规则（`hangul.js`）
+
+* 词内相邻两个音节按顺序处理收音 + 下一音节初声：元音开头 → 连音（双收音只移后一个，ㅅ 移过去读 ㅆ；ㅎ 脱落；ㄷ/ㅌ + 이 → 지/치）；ㅎ 收音 + ㄱㄷㅈ → 送气、+ ㅅ → ㅆ、+ ㄴ → ㄴ；ㄱㄷㅂ(ㅈ) + ㅎ → 送气；ㄱㄷㅂ + ㄴㅁ → 鼻音化；ㄴ + ㄹ / ㄹ + ㄴ → ㄹㄹ；ㅁㅇ + ㄹ → ㄴ；ㄱㅂ + ㄹ → ㅇㅁ + ㄴ。
+* `pronounceKorean` 不做单纯的收音中和（`있` 仍显示 `있`，避免注音过多），`romanizeKorean` 会中和（`있길` → `itgil`）；对发音形式再转一次罗马字结果相同，所以用户改了发音韩文后可直接重算。
+* RR 写法：初声 ㄹ 写 r、收音写 l、ㄹㄹ 写 ll；ㅢ 一律 ui；不标紧音（`학교` → `hakgyo`）。
 
 ### 分词规则（`analyzer.js`）
 
@@ -297,6 +306,8 @@ LRC 只有「每句开始时间」。原实现把「下一句开始」当成本�
 ---
 
 ## 9. 已知限制
+
+* 韩语罗马字按词内发音规则自动生成；依赖词法的音变（ㄴ 添加 `꽃잎` → 꼰닙、汉字词的紧音化、跨词连读等）不处理，可在行编辑器里改发音韩文或罗马字。
 
 * 分词依赖 kuromoji/IPADIC，歌词中的特殊读法（当て字）常需手动修正——这正是编辑功能的用途；修正后可加入「我的词典」复用。
 * 自动获取逐字时间轴依赖网易云 / PetitLyrics 能搜到同一版本；搜不到时只能按音拍估算，可用「对齐」与 ±0.1 秒微调，或在行编辑器里逐句改时间。

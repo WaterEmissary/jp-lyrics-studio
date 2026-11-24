@@ -49,6 +49,7 @@ export function charWeights(line) {
           const hch = toHiragana(ch);
           if (SMALL.test(hch)) out.push(0);
           else if (/[ぁ-ゖー]/.test(hch)) out.push(1);
+          else if (/[\uac00-\ud7a3]/.test(ch)) out.push(1);   // 韩文：一个音节一拍
           else if (/\s/.test(ch)) out.push(0);
           else out.push(0.5);
         });

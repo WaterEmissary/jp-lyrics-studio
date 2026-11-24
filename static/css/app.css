@@ -34,6 +34,7 @@
   --mm-w: 64px;
   --font: "Inter", system-ui, -apple-system, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-jp: "Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", "Meiryo", var(--font);
+  --font-ko: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", var(--font);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -814,3 +815,6 @@ body:not([data-app="lyrics"]) .minimap { display: none; }
 }
 @media (max-width: 720px) { .minimap { display: none; } }
 body:not(.has-lyrics) .lyrics { right: 0; }
+
+/* 韩语歌词：用韩文字体 */
+.jp:lang(ko), .wk:lang(ko) { font-family: var(--font-ko); }

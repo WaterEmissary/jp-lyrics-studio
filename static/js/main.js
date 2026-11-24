@@ -4,7 +4,7 @@ import { state, lineById } from './state.js';
 import { api } from './api.js';
 import { applyDisplayClasses, renderSong, rerenderAllLines, renderLineContent } from './render.js';
 import { initMinimap, renderMinimap } from './minimap.js';
-import { setUserDict, ensureTokenizer } from './analyzer.js';
+import { setUserDict, ensureTokenizer, detectSongLang } from './analyzer.js';
 import {
   initPlayer, setRate, stepRate, togglePlay, stepLine, toggleLoopCurrent, seekLyric, playLine, play, pause,
   player, noteUserScroll, startTapSync, tap, untap, tapSync, clearSegment, centerLine, RATES, calibrateOffset,
@@ -264,10 +264,13 @@ const FONT_STEPS = [1, 1.15, 1.3, 0.9];
 function syncFab() {
   const s = state.settings;
   const kana = $('#lyric-fab [data-fab="kana"]');
-  kana.textContent = s.kanaScript === 'katakana' ? 'ア' : 'あ';
+  const korean = detectSongLang(state.song?.lines) === 'ko';
+  kana.textContent = korean ? '발' : s.kanaScript === 'katakana' ? 'ア' : 'あ';
   kana.classList.toggle('on', !!s.showFurigana);
   kana.classList.toggle('off', !s.showFurigana);
-  kana.title = `假名注音：${!s.showFurigana ? '已隐藏' : s.kanaScript === 'katakana' ? '片假名' : '平假名'}（点击切换：平假名 → 片假名 → 隐藏）`;
+  kana.title = korean
+    ? `发音注音（在发生连音 / 鼻音化等音变的字上方标出实际发音）：${s.showFurigana ? '显示' : '已隐藏'}（点击切换）`
+    : `假名注音：${!s.showFurigana ? '已隐藏' : s.kanaScript === 'katakana' ? '片假名' : '平假名'}（点击切换：平假名 → 片假名 → 隐藏）`;
   for (const [k, key] of [['romaji', 'showRomaji'], ['zh', 'showZh']]) {
     const b = $(`#lyric-fab [data-fab="${k}"]`);
     b.classList.toggle('on', !!s[key]);
@@ -290,6 +293,8 @@ function initFab() {
     const s = state.settings;
     switch (b.dataset.fab) {
       case 'kana':
+        // 韩语歌：发音注音 显示 / 隐藏
+        if (detectSongLang(state.song?.lines) === 'ko') { patchSettings({ showFurigana: !s.showFurigana }); break; }
         // 平假名 → 片假名 → 隐藏 → 平假名
         if (!s.showFurigana) patchSettings({ showFurigana: true, kanaScript: 'hiragana' }, { rerender: true });
         else if (s.kanaScript !== 'katakana') patchSettings({ kanaScript: 'katakana' }, { rerender: true });

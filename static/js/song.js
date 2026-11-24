@@ -3,9 +3,10 @@ import { $, toast, bus, setStatus, sleep, normText } from './util.js';
 import { state } from './state.js';
 import { api } from './api.js';
 import { renderSong, renderLineContent } from './render.js';
-import { analyzeText, ensureTokenizer, wordsMatchText, fallbackWords, rubyPlainText } from './analyzer.js';
+import { analyzeText, ensureTokenizer, wordsMatchText, fallbackWords, rubyPlainText, detectSongLang, lineLang } from './analyzer.js';
 import { loadSongAudio, lyricTime, seekLyric, syncHighlight } from './player.js';
 import { isCoarseTiming } from './timing.js';
+import { hasHangul } from './hangul.js';
 
 let analysisGen = 0;
 
@@ -54,6 +55,12 @@ export function updateSongHeader() {
   $('#song-timeline').dataset.tl = tl || '';
 }
 
+/** 支持韩语之前用日语分词器分析过的韩语行（罗马音还是韩文 / 空的）：未手动编辑的自动重新分析一次 */
+function needsKoreanUpgrade(ln) {
+  return !ln.wordsEdited && hasHangul(ln.text) && Array.isArray(ln.words)
+    && ln.words.some(w => !w.p && hasHangul(w.t) && (!w.r || hasHangul(w.r)));
+}
+
 /** 对缺少分词结果（或原文已变）的行做分析，渲染并分批回写服务端（不记入历史） */
 export async function analyzeSong({ onlyUnedited = false, force = false } = {}) {
   const song = state.song;
@@ -61,16 +68,20 @@ export async function analyzeSong({ onlyUnedited = false, force = false } = {}) 
   const gen = ++analysisGen;
   const todo = song.lines.filter(ln => {
     if (force || onlyUnedited) return !ln.wordsEdited;
-    return !wordsMatchText(ln.words, ln.text);
+    return !wordsMatchText(ln.words, ln.text) || needsKoreanUpgrade(ln);
   });
   if (!todo.length) return;
-  setStatus(`正在加载日语词典…（首次约 17MB）`);
-  try {
-    await ensureTokenizer();
-  } catch (e) {
-    setStatus('分词器加载失败：' + e.message + '（歌词仍可显示，刷新页面重试）', { error: true });
-    todo.forEach(ln => { if (!Array.isArray(ln.words)) { ln.words = fallbackWords(ln.text); renderLineContent(ln); } });
-    return;
+  const lang = detectSongLang(song.lines);
+  // 只有日语行才需要加载日语词典（韩语歌直接分析）
+  if (todo.some(ln => lineLang(ln.text, lang) === 'ja')) {
+    setStatus(`正在加载日语词典…（首次约 17MB）`);
+    try {
+      await ensureTokenizer();
+    } catch (e) {
+      setStatus('分词器加载失败：' + e.message + '（歌词仍可显示，刷新页面重试）', { error: true });
+      todo.forEach(ln => { if (!Array.isArray(ln.words)) { ln.words = fallbackWords(ln.text); renderLineContent(ln); } });
+      return;
+    }
   }
   if (gen !== analysisGen || state.song !== song) return;
   const cache = new Map();
@@ -92,7 +103,7 @@ export async function analyzeSong({ onlyUnedited = false, force = false } = {}) 
     let words = cache.get(key);
     if (!words) {
       try {
-        words = await analyzeText(ln.text, { ruby: ln.ruby });
+        words = await analyzeText(ln.text, { ruby: ln.ruby, lang });
       } catch {
         words = fallbackWords(ln.text);
       }
@@ -160,7 +171,8 @@ export async function applyMarumaru(item, { quiet = false } = {}) {
 export async function autoEnrich(song = state.song, { marumaru = true, timing = true } = {}) {
   if (!song?.lines?.length) return;
   const tasks = [];
-  if (marumaru) {
+  // Marumaru 是日语注音站，韩语歌不查
+  if (marumaru && detectSongLang(song.lines) !== 'ko') {
     tasks.push((async () => {
       const cands = await marumaruCandidates(song);
       if (cands.length && state.song === song) await applyMarumaru(cands[0], { quiet: true });

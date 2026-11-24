@@ -3,6 +3,7 @@ import { $, escapeHTML, h } from './util.js';
 import { state } from './state.js';
 import { rubyHTML } from './kana.js';
 import { lineRomaji } from './analyzer.js';
+import { hasHangul } from './hangul.js';
 
 export const ICONS = {
   play: '<svg viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></svg>',
@@ -80,6 +81,7 @@ export function renderLineContent(line) {
   if (!el) return;
   const inline = state.settings.layout === 'inline';
   const jp = el.querySelector('.jp');
+  jp.lang = hasHangul(line.text) ? 'ko' : 'ja';
   jp.innerHTML = jpHTML(line, { inline });
   jp._karaoke = null;
   const ro = el.querySelector('.ro');

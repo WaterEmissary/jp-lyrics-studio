@@ -51,7 +51,7 @@ def parse_lrc(text: str) -> tuple[list[dict], dict, str]:
     返回 (lines, meta, timeline)：
       timeline = 'synced'  有时间标签
                = 'synthetic' 纯文本，按 4 秒间隔生成的估算时间轴
-    同一时间戳出现两行（常见于「日文行 + 中文行」双语 LRC）时，第二行作为上一行的中文翻译。
+    同一时间戳出现两行（常见于「日文 / 韩文行 + 中文行」双语 LRC）时，第二行作为上一行的中文翻译。
     """
     meta: dict = {}
     raw_lines = (text or "").replace("﻿", "").splitlines()
@@ -101,7 +101,7 @@ def parse_lrc(text: str) -> tuple[list[dict], dict, str]:
     merged: list[dict] = []
     for item in out:
         if merged and abs(merged[-1]["time"] - item["time"]) < 1e-6 and not merged[-1].get("zh"):
-            if _looks_japanese(merged[-1]["text"]) and not _looks_japanese(item["text"]):
+            if _looks_source(merged[-1]["text"]) and not _looks_source(item["text"]):
                 merged[-1]["zh"] = item["text"]
                 continue
         merged.append(item)
@@ -115,8 +115,9 @@ def parse_lrc(text: str) -> tuple[list[dict], dict, str]:
     return lines, meta, "synced"
 
 
-def _looks_japanese(s: str) -> bool:
-    return bool(re.search(r"[぀-ヿ]", s or ""))
+def _looks_source(s: str) -> bool:
+    """原文行：含假名（日语）或韩文（韩语）"""
+    return bool(re.search(r"[぀-ヿ가-힣ㄱ-ㆎ]", s or ""))
 
 
 def fmt_time(t: float) -> str:

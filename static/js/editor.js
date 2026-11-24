@@ -8,7 +8,8 @@ import { $, $$, h, toast, bus, fmtTime, parseTime, setStatus } from './util.js';
 import { state, sameTextLines, lineById } from './state.js';
 import { api } from './api.js';
 import { renderLineContent, rerenderPreservingScroll } from './render.js';
-import { analyzeText, readingFor, wordsMatchText, setUserDict, getUserDict, isReady, ensureTokenizer } from './analyzer.js';
+import { analyzeText, readingFor, wordsMatchText, setUserDict, getUserDict, isReady, detectSongLang } from './analyzer.js';
+import { hasHangul } from './hangul.js';
 import { splitReading, wordKanaToRomaji, wordRomajiToKana, toHiragana, toKatakana, isLatinWord, isKatakanaWord } from './kana.js';
 import { attachRomajiIME } from './ime.js';
 import { lyricTime, playLine, pause, clearSegment, isPlaying } from './player.js';
@@ -49,13 +50,17 @@ export function mergeWords(words, a, b) {
 /** 在词 wi 内部按字符偏移 cuts 拆分；读音尽量精确拆，拆不出的用分词器补 */
 export async function splitWord(words, wi, cuts) {
   const w = words[wi];
-  const parts = splitReading(w.t, w.k, cuts);
+  const korean = hasHangul(w.t);
+  // 韩语：拆开后各部分重新按发音规则求读音 / 罗马字
+  const parts = korean
+    ? [0, ...cuts].map((c, i, arr) => ({ t: [...w.t].slice(c, arr[i + 1]).join(''), k: null }))
+    : splitReading(w.t, w.k, cuts);
   const out = [];
   for (const p of parts) {
     let k = p.k;
     let r;
     if (k === null || k === undefined) {
-      if (isReady()) {
+      if (korean || isReady()) {
         const res = await readingFor(p.t);
         k = res.k;
         r = res.r;
@@ -351,13 +356,15 @@ function wordRow(w, wi) {
   }
   const m = w.m || {};
   const latin = isLatinWord(w.t);
+  const korean = hasHangul(w.t);
   const kana = h('input', {
-    class: 'wk', value: w.k || '', lang: 'ja', 'aria-label': `${w.t} 的读音`,
-    placeholder: latin ? '（英文无需读音）' : '可直接打罗马音', disabled: latin || undefined,
+    class: 'wk', value: w.k || '', lang: korean ? 'ko' : 'ja', 'aria-label': `${w.t} 的读音`,
+    placeholder: latin ? '（英文无需读音）' : korean ? '实际发音（韩文）' : '可直接打罗马音', disabled: latin || undefined,
+    title: korean ? '按实际发音写的韩文（如 같아 → 가타）；改了会自动重新生成罗马字' : '',
   });
   const roma = h('input', { class: 'wr', value: w.r || '', placeholder: '罗马音', 'aria-label': `${w.t} 的罗马音` });
-  // 读音框：不用日语输入法，直接打罗马音自动转假名（大写或片假名词 → 片假名）
-  if (!latin) attachRomajiIME(kana, { katakana: () => isKatakanaWord(w.t) || isKatakanaWord(w.k) });
+  // 读音框：不用日语输入法，直接打罗马音自动转假名（大写或片假名词 → 片假名）；韩语词用系统韩文输入
+  if (!latin && !korean) attachRomajiIME(kana, { katakana: () => isKatakanaWord(w.t) || isKatakanaWord(w.k) });
   kana.addEventListener('input', () => {
     w.k = kana.value.trim();
     // 假名 → 罗马音（还有没打完的字母时先不动罗马音）
@@ -367,7 +374,7 @@ function wordRow(w, wi) {
   // 罗马音 → 假名
   roma.addEventListener('input', () => {
     w.r = roma.value.trim();
-    if (!latin) {
+    if (!latin && !korean) {
       const k = wordRomajiToKana(w.t, w.r);
       if (!/[A-Za-z]/.test(k)) { w.k = k; kana.value = k; }
     }
@@ -441,7 +448,7 @@ function onLineRomajiInput() {
       p += counts[i];
       if (r === w.r) return;
       w.r = r;
-      if (!isLatinWord(w.t)) {
+      if (!isLatinWord(w.t) && !hasHangul(w.t)) {
         const k = wordRomajiToKana(w.t, r);
         if (!/[A-Za-z]/.test(k)) w.k = k;
       }
@@ -477,8 +484,7 @@ async function reanalyzeDraft() {
   const text = $('#le-text').value;
   setStatus('正在分析…');
   try {
-    await ensureTokenizer();
-    ed.draft.words = await analyzeText(text, { ruby: ed.line.text === text ? ed.line.ruby : null });
+    ed.draft.words = await analyzeText(text, { ruby: ed.line.text === text ? ed.line.ruby : null, lang: detectSongLang(state.song?.lines) });
     ed.draft.text = text;
     ed.textDirty = false;
     renderEditor();

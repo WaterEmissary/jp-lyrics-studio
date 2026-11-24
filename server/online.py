@@ -316,8 +316,10 @@ async def petit_word_timing(title: str, artist: str = "") -> list[dict]:
 
 # ================================================================ 翻译
 async def translate_ja_zh(text: str) -> str:
+    """日语 / 韩语 → 中文（含韩文时按韩语翻译）"""
+    src = "ko" if re.search(r"[가-힣ㄱ-ㆎ]", text or "") else "ja"
     r = await client().get("https://api.mymemory.translated.net/get",
-                           params={"q": text, "langpair": "ja|zh-CN"}, timeout=12)
+                           params={"q": text, "langpair": f"{src}|zh-CN"}, timeout=12)
     r.raise_for_status()
     return ((r.json() or {}).get("responseData") or {}).get("translatedText", "") or ""
 

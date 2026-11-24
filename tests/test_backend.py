@@ -234,3 +234,27 @@ def test_line_focus_flag():
     c.put(f"/api/songs/{song['id']}/lines", json={"lines": [{"id": lid, "focus": True}], "record": False})
     lines = c.get(f"/api/songs/{song['id']}").json()["lines"]
     assert [ln["focus"] for ln in lines] == [False, True, False]
+
+
+def test_korean_bilingual_lrc_merges_translation():
+    from server.lrc import parse_lrc
+    lines, _, tl = parse_lrc("[00:01.53]날 찾는 것 같아\n[00:01.53]好像在找我\n[00:12.24]아득히 손을 내미는 너\n")
+    assert tl == "synced" and len(lines) == 2
+    assert lines[0]["text"] == "날 찾는 것 같아" and lines[0]["zh"] == "好像在找我"
+
+
+def test_hangul_romanization_js():
+    import shutil
+    import subprocess
+    from pathlib import Path
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("没有 node，跳过前端韩语罗马字单测")
+    ver = subprocess.run([node, "--version"], capture_output=True, text=True).stdout.strip().lstrip("v")
+    if int((ver.split(".") or ["0"])[0] or 0) < 22:
+        import pytest
+        pytest.skip(f"node {ver} 太旧（需要 ≥ 22 才能直接加载前端 ES 模块）")
+    root = Path(__file__).resolve().parent.parent
+    r = subprocess.run([node, str(root / "tests" / "test_hangul.mjs")], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr

@@ -1,10 +1,13 @@
-// 日语分析：kuromoji 分词 → 文节式「单词」分组 → 读音 / 罗马音。
+// 歌词分析：
+//   * 日语：kuromoji 分词 → 文节式「单词」分组 → 读音 / 罗马音；
+//   * 韩语（含韩文的行，或韩语歌里的纯英文行）：按空格分词 → 发音韩文（k）/ 按发音规则转写的罗马字（r），见 hangul.js。
 //
 // 单词结构（存进 song.json 的 line.words[]）：
 //   { t: 词面, k: 读音(假名), r: 罗马音, p?: 1 表示标点/空白, m?: 标记 }
 //   m = { hl: 'y'|'g'|'b'|'p'|'o', box: true, note: '备注', tone: 1..4, link: true(与下一个词连读), brk: true(词后停顿) }
 // 约束：words.map(w => w.t).join('') === line.text （编辑器依赖它做字符级切分）
 import { toHiragana, kanaToRomaji, wordKanaToRomaji, RE_KANA_ONLY, RE_PUNCT, hasKanji } from './kana.js';
+import { hasHangul, koreanWords } from './hangul.js';
 
 const DICT_PATH = '/static/dict/';
 
@@ -240,9 +243,11 @@ function readingFromRuby(segs, a, b) {
  * 分析一行文本 → words[]。
  * opts.ruby：外部注音 HTML（来自 Marumaru），用于覆盖 kuromoji 的读音（演唱读法更准）。
  */
-export async function analyzeText(text, { ruby = null } = {}) {
+export async function analyzeText(text, { ruby = null, lang = 'ja' } = {}) {
   const src = String(text || '');
   if (!src.trim()) return [];
+  // 韩语不需要日语分词器
+  if (lineLang(src, lang) === 'ko') return koreanWords(src);
   await ensureTokenizer();
   const groups = groupTokens(tokenize(src));
   let words = groups.map(tokensToWord);
@@ -262,6 +267,28 @@ export async function analyzeText(text, { ruby = null } = {}) {
     });
   }
   return words;
+}
+
+// ---------------------------------------------------------------- 语言判断（日语 / 韩语）
+const RE_KANA_CHAR = /[ぁ-ゖァ-ヺ]/;
+
+/** 整首歌的主要语言：含韩文的行多于含假名的行 → 'ko'，否则 'ja' */
+export function detectSongLang(lines) {
+  let ko = 0;
+  let ja = 0;
+  for (const ln of lines || []) {
+    const t = ln?.text || '';
+    if (hasHangul(t)) ko++;
+    else if (RE_KANA_CHAR.test(t)) ja++;
+  }
+  return ko > ja ? 'ko' : 'ja';
+}
+
+/** 一行用哪种分析：有韩文 → ko；有假名 → ja；其它（纯英文 / 纯汉字）跟随整首歌 */
+export function lineLang(text, songLang = 'ja') {
+  if (hasHangul(text)) return 'ko';
+  if (RE_KANA_CHAR.test(text)) return 'ja';
+  return songLang === 'ko' ? 'ko' : 'ja';
 }
 
 /** 校验 words 是否与原文一致（原文被修改后需重新分析） */

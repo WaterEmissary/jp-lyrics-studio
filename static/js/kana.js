@@ -1,4 +1,5 @@
 // 假名 / 罗马音 / 注音对齐 —— 纯函数，无 DOM 依赖（可在 Node 中单测）
+import { hasHangul, romanizeKorean, koreanRubyHTML } from './hangul.js';
 
 export const RE_KANJI = /[㐀-䶿一-鿿豈-﫿々〆ヶ]/;
 const RE_KANJI_CHAR = /^[㐀-䶿一-鿿豈-﫿々〆ヶ]$/;
@@ -96,6 +97,8 @@ export function kanaToRomaji(input) {
  * 用户手动修改读音后，按词面推断罗马音：词尾单独的助词 は/へ/を 读作 wa/e/o 并空格隔开。
  */
 export function wordKanaToRomaji(surface, kana) {
+  // 韩语：读音框里是发音韩文，直接按发音转罗马字
+  if (hasHangul(surface) || hasHangul(kana)) return romanizeKorean(kana || surface);
   const k = toHiragana(kana || '');
   const t = toHiragana(surface || '');
   if (!k) return /^[\x20-\x7e]+$/.test(surface || '') ? String(surface).toLowerCase() : '';
@@ -182,6 +185,8 @@ export function splitReading(surface, reading, cuts) {
 
 /** 渲染词的注音 HTML（rt 按设置转平/片假名） */
 export function rubyHTML(surface, reading, script = 'hiragana', esc = (s) => s) {
+  // 韩语：只在发音与写法不同的音节上方标出发音韩文
+  if (hasHangul(surface)) return koreanRubyHTML(surface, reading, esc);
   const segs = alignRuby(surface, reading);
   return segs.map(seg => {
     if (!seg.rt) return esc(seg.b);
